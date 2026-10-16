@@ -5,15 +5,17 @@
   <a class="button ghost" href="{{ url_for('leads') }}">Voltar aos leads</a>
 </section>
 
-<form class="filters" method="get">
+<div class="filters">
+  <form method="get">
   <select name="status">
     <option value="draft" {% if selected_state=='draft' %}selected{% endif %}>Pendentes</option>
     <option value="sent" {% if selected_state=='sent' %}selected{% endif %}>Envio confirmado manualmente</option>
     <option value="archived" {% if selected_state=='archived' %}selected{% endif %}>Arquivados</option>
   </select>
   <button class="button secondary" type="submit">Filtrar fila</button>
+  </form>
   <form method="post" action="{{ url_for('start_auto_draft') }}"><button class="button" type="submit">Preparar novos rascunhos</button></form>
-</form>
+</div>
 
 <section class="panel">
 {% if rows %}
