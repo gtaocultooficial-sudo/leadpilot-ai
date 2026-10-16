@@ -8,7 +8,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote_plus, urlencode
 from urllib.request import Request, urlopen
 
-from flask import Blueprint, flash, redirect, render_template, request, session, url_for
+from flask import Blueprint, current_app, flash, redirect, render_template, request, session, url_for
 
 bp = Blueprint("prospecting_tools", __name__)
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
@@ -126,12 +126,15 @@ def _search_tags(segment):
 
 
 def _build_query(segment, city):
-    clean_city = city.split(",")[0].strip()
+    raw_city = city.split(",")[0].strip()
+    clean_city = re.sub(r"[^\w\s.'’-]", "", raw_city, flags=re.UNICODE).strip()
+    clean_segment = re.sub(r"[^\w\s.'’-]", "", segment, flags=re.UNICODE).strip()
     if not clean_city:
         raise ValueError("Informe uma cidade, por exemplo: Guarulhos, SP.")
-    # Escape input before inserting it into an Overpass regular expression.
+    if not clean_segment:
+        raise ValueError("Informe um segmento comercial válido.")
     city_re = re.escape(clean_city).replace("/", r"\/")
-    tags = _search_tags(segment)
+    tags = _search_tags(clean_segment)
     statements = []
     if tags:
         statements = [
@@ -139,7 +142,7 @@ def _build_query(segment, city):
             for tag, value in tags
         ]
     else:
-        segment_re = re.escape(segment.strip())
+        segment_re = re.escape(clean_segment).replace('"', r'\"')
         statements = [f'nwr["name"~"{segment_re}",i](area.searchArea);']
     query = (
         '[out:json][timeout:25];'
@@ -150,7 +153,7 @@ def _build_query(segment, city):
     return clean_city, query
 
 
-def _request_overpass(query):
+def _request_overpass(query, clean_city):
     body = urlencode({"data": query}).encode("utf-8")
     req = Request(
         OVERPASS_URL,
@@ -243,7 +246,7 @@ def _get_results(segment, city):
                ON CONFLICT(cache_key) DO UPDATE SET fetched_at=EXCLUDED.fetched_at""",
             (clean_city, now_iso()),
         )
-    results = _request_overpass(query)
+    results = _request_overpass(query, clean_city)
     _save_cache(cache_key, segment, clean_city, results)
     return cache_key, clean_city, results, "live"
 
@@ -278,7 +281,7 @@ def prospecting():
             if not results:
                 error = "Nenhuma empresa com nome e categoria compatíveis foi encontrada nesta pesquisa. Confira os links externos ou tente um segmento mais específico."
         except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
-            bp.logger.warning("Falha na busca OpenStreetMap: %s", exc)
+            current_app.logger.warning("Falha na busca OpenStreetMap: %s", exc)
             error = "A fonte de dados está ocupada ou indisponível agora. Aguarde um pouco ou use os links de pesquisa abaixo."
         except (RuntimeError, ValueError) as exc:
             error = str(exc)
