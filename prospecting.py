@@ -471,6 +471,95 @@ def _get_results(segment, city):
     return cache_key, result_city, results, "photon"
 
 
+def _ensure_jobs():
+    db, _, _ = _db_helpers()
+    with db() as conn:
+        conn.execute("""CREATE TABLE IF NOT EXISTS prospecting_jobs (
+            id TEXT PRIMARY KEY,
+            segment TEXT NOT NULL,
+            city TEXT NOT NULL,
+            status TEXT NOT NULL,
+            cache_key TEXT NOT NULL DEFAULT '',
+            result_count INTEGER NOT NULL DEFAULT 0,
+            message TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )""")
+
+
+def _set_job(job_id, **values):
+    db, now_iso, _ = _db_helpers()
+    allowed = {"status", "cache_key", "result_count", "message"}
+    assignments = []
+    params = []
+    for key, value in values.items():
+        if key not in allowed:
+            raise ValueError("Campo de tarefa inválido.")
+        assignments.append(f"{key}=%s")
+        params.append(value)
+    assignments.append("updated_at=%s")
+    params.extend([now_iso(), job_id])
+    with db() as conn:
+        conn.execute(
+            "UPDATE prospecting_jobs SET " + ", ".join(assignments) + " WHERE id=%s",
+            params,
+        )
+
+
+def _run_search_job(app_obj, job_id, segment, city):
+    # Executa chamadas de rede fora da requisição web para a página não ficar bloqueada.
+    with app_obj.app_context():
+        _set_job(job_id, status="running", message="Consultando a fonte pública…")
+        try:
+            cache_key, _clean_city, results, _source_kind = _get_results(segment, city)
+            message = "" if results else (
+                "Nenhuma empresa compatível foi encontrada. "
+                "Tente outro termo ou confira as pesquisas externas."
+            )
+            _set_job(
+                job_id,
+                status="done",
+                cache_key=cache_key,
+                result_count=len(results),
+                message=message,
+            )
+        except Exception as exc:
+            app_obj.logger.warning(
+                "Busca de prospecção falhou (%s): %s",
+                job_id,
+                str(exc)[:400],
+            )
+            _set_job(
+                job_id,
+                status="failed",
+                cache_key="",
+                result_count=0,
+                message=str(exc)[:500] or "Não foi possível concluir a busca.",
+            )
+
+
+def _create_search_job(segment, city):
+    _ensure_jobs()
+    db, now_iso, _ = _db_helpers()
+    job_id = uuid.uuid4().hex
+    now = now_iso()
+    with db() as conn:
+        conn.execute(
+            """INSERT INTO prospecting_jobs
+               (id,segment,city,status,cache_key,result_count,message,created_at,updated_at)
+               VALUES(%s,%s,%s,'queued','',0,'Preparando busca…',%s,%s)""",
+            (job_id, segment, city, now, now),
+        )
+    app_obj = current_app._get_current_object()
+    threading.Thread(
+        target=_run_search_job,
+        args=(app_obj, job_id, segment, city),
+        daemon=True,
+        name=f"leadpilot-search-{job_id[:8]}",
+    ).start()
+    return job_id
+
+
 @bp.route("/prospecting/start", methods=["POST"])
 def start_search():
     segment = request.form.get("segment", "").strip()[:80]
