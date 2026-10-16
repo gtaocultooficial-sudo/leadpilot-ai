@@ -85,21 +85,85 @@ def score_lead(row):
     return min(score, 100)
 
 
-def make_message(lead):
-    company = lead["company"]
-    contact = (lead.get("contact_name") or "").strip()
-    segment = (lead.get("segment") or "").strip() or "sua empresa"
-    need = (lead.get("need") or "").strip()
-    opening = f"Olá, {contact}!" if contact else "Olá!"
-    reason = f"Vi que a {company} atua no segmento de {segment}."
-    if need:
-        reason += f" Pensei em uma forma de ajudar com {need.lower()}."
+def assess_lead(lead):
+    """Explain data completeness without implying purchase intent."""
+    score = score_lead(lead)
+    missing = []
+    if not (lead.get("website") or "").strip():
+        missing.append("Conferir e registrar o site oficial da empresa.")
+    if not ((lead.get("email") or "").strip() or (lead.get("phone") or "").strip()):
+        missing.append("Encontrar um canal comercial público e adequado.")
+    if not (lead.get("contact_name") or "").strip():
+        missing.append("Identificar o contato comercial, se disponível publicamente.")
+    if not (lead.get("need") or "").strip():
+        missing.append("Registrar uma necessidade ou oportunidade observável antes da abordagem.")
+    if not (lead.get("source") or "").strip():
+        missing.append("Registrar a fonte e a data da pesquisa.")
+    if score < 40:
+        level = "Dados incompletos"
+        summary = "Enriqueça os dados antes de priorizar este lead."
+    elif score < 70:
+        level = "Em verificação"
+        summary = "Confira a pertinência e o canal comercial antes de abordar."
     else:
-        reason += " Estou entrando em contato para entender se há oportunidades de simplificar tarefas comerciais e acompanhar clientes potenciais."
-    return (f"{opening}\n\n{reason}\n\n"
-            "Trabalho com soluções práticas de organização e automação comercial. Faz sentido eu te enviar uma demonstração curta?\n\n"
-            "Se não for relevante, é só me avisar que não volto a entrar em contato.\n\nObrigado!")
+        level = "Bem documentado"
+        summary = "Os dados estão mais completos; revise a abordagem antes de usar."
+    return {
+        "score": score,
+        "level": level,
+        "summary": summary,
+        "missing": missing,
+        "score_note": "O score mede completude dos dados, não intenção de compra nem probabilidade comprovada de fechar negócio.",
+    }
 
+
+def make_message_variants(lead):
+    """Draft alternative outreach copy using only entered business context."""
+    company = (lead.get("company") or "sua empresa").strip()
+    contact = (lead.get("contact_name") or "").strip()
+    segment = (lead.get("segment") or "").strip()
+    city = (lead.get("city") or "").strip()
+    need = (lead.get("need") or "").strip()
+    greeting = f"Olá, {contact}!" if contact else "Olá! Tudo bem?"
+    context = f"Vi que a {company}" 
+    if segment:
+        context += f" atua no segmento de {segment}"
+    if city:
+        context += f" em {city}"
+    context += "."
+    if need:
+        opportunity = f"Estou entrando em contato porque registrei esta possível oportunidade: {need}. Queria confirmar se isso faz sentido para vocês."
+    else:
+        opportunity = "Estou entrando em contato para entender se faz sentido melhorar a organização do processo comercial e o acompanhamento de oportunidades."
+    opt_out = "Se não for relevante, me avise e não volto a entrar em contato."
+
+    whatsapp = (
+        f"{greeting}\n\n{context}\n{opportunity}\n\n"
+        "Trabalho com soluções práticas de organização comercial e acompanhamento de leads. "
+        "Posso te explicar a ideia em poucas linhas?\n\n"
+        f"{opt_out}"
+    )
+    email_subject = f"Ideia de organização comercial para {company}"
+    email_body = (
+        f"{greeting}\n\n{context}\n\n{opportunity}\n\n"
+        "A proposta é conversar brevemente para entender o processo atual e avaliar se uma solução simples "
+        "de organização e acompanhamento comercial seria útil. Não estou presumindo que exista um problema; "
+        "quero apenas confirmar se o tema é relevante para vocês.\n\n"
+        "Se fizer sentido, posso enviar um resumo curto. Caso não seja pertinente, basta responder que não deseja novos contatos.\n\n"
+        "Obrigado!"
+    )
+    call_opener = (
+        f"Olá, poderia falar com a pessoa responsável pelo comercial? "
+        f"Meu nome é [seu nome]. Estou ligando para a {company}"
+        + (f", do segmento de {segment}" if segment else "")
+        + ". Gostaria de confirmar se faz sentido uma conversa rápida sobre organização comercial e acompanhamento de oportunidades. "
+        "Se não for um assunto relevante, encerro por aqui."
+    )
+    return [
+        {"key": "whatsapp", "title": "WhatsApp / mensagem curta", "body": whatsapp, "subject": ""},
+        {"key": "email", "title": "E-mail comercial", "body": email_body, "subject": email_subject},
+        {"key": "ligacao", "title": "Abertura para ligação", "body": call_opener, "subject": ""},
+    ]
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -213,7 +277,9 @@ def lead_message(lead_id):
     if not lead:
         flash("Lead não encontrado.", "error")
         return redirect(url_for("leads"))
-    return render_template("message.html", lead=lead, message=make_message(lead))
+    variants = make_message_variants(lead)
+    qualification = assess_lead(lead)
+    return render_template("message.html", lead=lead, variants=variants, qualification=qualification)
 
 
 @app.route("/import", methods=["GET", "POST"])
