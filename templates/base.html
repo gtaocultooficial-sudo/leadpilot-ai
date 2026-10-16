@@ -6,7 +6,7 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-<header class="topbar"><a class="brand" href="{{ url_for('dashboard') }}">LeadPilot <span>AI</span></a><nav><a href="{{ url_for('dashboard') }}">Painel</a><a href="{{ url_for('leads') }}">Leads</a><a href="{{ url_for('new_lead') }}">+ Adicionar</a><a href="{{ url_for('import_csv') }}">Importar CSV</a><a href="{{ url_for('logout') }}">Sair</a></nav></header>
+<header class="topbar"><a class="brand" href="{{ url_for('dashboard') }}">LeadPilot <span>AI</span></a><nav><a href="{{ url_for('dashboard') }}">Painel</a><a href="{{ url_for('prospecting_tools.prospecting') }}">Prospecção</a><a href="{{ url_for('leads') }}">Leads</a><a href="{{ url_for('new_lead') }}">+ Adicionar</a><a href="{{ url_for('import_csv') }}">Importar CSV</a><a href="{{ url_for('logout') }}">Sair</a></nav></header>
 <main class="container">
 {% with messages = get_flashed_messages(with_categories=true) %}{% if messages %}{% for category, message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}{% endif %}{% endwith %}
 {% block content %}{% endblock %}
