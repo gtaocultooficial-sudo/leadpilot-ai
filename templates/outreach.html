@@ -67,7 +67,6 @@
       </form>
       <p class="muted" style="margin-top:8px">O registro atualiza o lead para “Respondeu”, salva a observação e limpa o acompanhamento deste contato. Nenhuma mensagem é enviada automaticamente.</p>
     </div>
-    {% if d.status=='sent' %}
     <div class="panel" style="margin-top:14px">
       <h4 style="margin:0 0 10px">Agendar próximo acompanhamento</h4>
       <form method="post" action="{{ url_for('schedule_outreach_follow_up', draft_id=d.id) }}" class="form-grid">
