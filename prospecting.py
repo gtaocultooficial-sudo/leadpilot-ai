@@ -2,7 +2,8 @@
 import hashlib
 import json
 import re
-import time
+import threading
+import uuid
 from datetime import datetime, timedelta, timezone
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote_plus, urlencode, urlparse
@@ -179,7 +180,8 @@ def _request_overpass(query, clean_city):
             method="POST",
         )
         try:
-            with urlopen(req, timeout=22) as response:
+            timeout_seconds = 7 if index == 0 else 5
+            with urlopen(req, timeout=timeout_seconds) as response:
                 payload = json.loads(response.read().decode("utf-8"))
             break
         except HTTPError as exc:
@@ -315,6 +317,128 @@ def _get_results(segment, city):
     return cache_key, clean_city, results, "live"
 
 
+def _ensure_jobs():
+    db, _, _ = _db_helpers()
+    with db() as conn:
+        conn.execute("""CREATE TABLE IF NOT EXISTS prospecting_jobs (
+            id TEXT PRIMARY KEY,
+            segment TEXT NOT NULL,
+            city TEXT NOT NULL,
+            status TEXT NOT NULL,
+            cache_key TEXT NOT NULL DEFAULT '',
+            result_count INTEGER NOT NULL DEFAULT 0,
+            message TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )""")
+
+
+def _set_job(job_id, **values):
+    db, now_iso, _ = _db_helpers()
+    allowed = {"status", "cache_key", "result_count", "message"}
+    assignments = []
+    params = []
+    for key, value in values.items():
+        if key not in allowed:
+            raise ValueError("Campo de tarefa inválido.")
+        assignments.append(f"{key}=%s")
+        params.append(value)
+    assignments.append("updated_at=%s")
+    params.append(now_iso())
+    params.append(job_id)
+    with db() as conn:
+        conn.execute(
+            "UPDATE prospecting_jobs SET " + ", ".join(assignments) + " WHERE id=%s",
+            params,
+        )
+
+
+def _run_search_job(app_obj, job_id, segment, city):
+    # Execute network I/O outside the request, so the browser can show progress.
+    with app_obj.app_context():
+        _set_job(job_id, status="running", message="Consultando a fonte pública…")
+        try:
+            cache_key, _clean_city, results, source_kind = _get_results(segment, city)
+            message = "" if results else (
+                "Nenhuma empresa compatível foi encontrada nesta pesquisa. "
+                "Tente outro termo ou confira as pesquisas externas."
+            )
+            _set_job(
+                job_id,
+                status="done",
+                cache_key=cache_key,
+                result_count=len(results),
+                message=message,
+            )
+        except Exception as exc:
+            app_obj.logger.warning("Busca de prospecção falhou (%s): %s", job_id, str(exc)[:400])
+            _set_job(
+                job_id,
+                status="failed",
+                cache_key="",
+                result_count=0,
+                message=str(exc)[:500] or "Não foi possível concluir a busca.",
+            )
+
+
+def _create_search_job(segment, city):
+    from flask import current_app
+    _ensure_jobs()
+    db, now_iso, _ = _db_helpers()
+    job_id = uuid.uuid4().hex
+    now = now_iso()
+    with db() as conn:
+        conn.execute(
+            """INSERT INTO prospecting_jobs
+               (id,segment,city,status,cache_key,result_count,message,created_at,updated_at)
+               VALUES(%s,%s,%s,'queued','',0,'Preparando busca…',%s,%s)""",
+            (job_id, segment, city, now, now),
+        )
+    app_obj = current_app._get_current_object()
+    threading.Thread(
+        target=_run_search_job,
+        args=(app_obj, job_id, segment, city),
+        daemon=True,
+        name=f"leadpilot-search-{job_id[:8]}",
+    ).start()
+    return job_id
+
+
+@bp.route("/prospecting/start", methods=["POST"])
+def start_search():
+    segment = request.form.get("segment", "").strip()[:80]
+    city = request.form.get("city", "").strip()[:120]
+    if not segment or not city:
+        flash("Informe o segmento e a cidade para pesquisar.", "error")
+        return redirect(url_for("prospecting_tools.prospecting"))
+    try:
+        job_id = _create_search_job(segment, city)
+    except Exception:
+        current_app.logger.exception("Não foi possível criar tarefa de prospecção")
+        flash("Não consegui iniciar a busca agora. Tente novamente em instantes.", "error")
+        return redirect(url_for("prospecting_tools.prospecting"))
+    return redirect(url_for("prospecting_tools.prospecting", segment=segment, city=city, job_id=job_id))
+
+
+@bp.route("/prospecting/status/<job_id>", methods=["GET"])
+def search_status(job_id):
+    _ensure_jobs()
+    db, _, _ = _db_helpers()
+    with db() as conn:
+        row = conn.execute(
+            "SELECT id,status,result_count,message FROM prospecting_jobs WHERE id=%s",
+            (job_id,),
+        ).fetchone()
+    if not row:
+        return {"error": "Tarefa não encontrada."}, 404
+    return {
+        "job_id": row["id"],
+        "status": row["status"],
+        "result_count": row["result_count"],
+        "message": row["message"],
+    }
+
+
 @bp.route("/prospecting", methods=["GET"])
 def prospecting():
     segment = request.args.get("segment", "").strip()[:80]
@@ -328,7 +452,47 @@ def prospecting():
     error = ""
     cached = False
 
-    if searched:
+    job_id = request.args.get("job_id", "").strip()[:64]
+    job_status = ""
+    job_message = ""
+    if searched and not job_id:
+        # Compatibility with an older open page using GET; redirect immediately to async search.
+        try:
+            job_id = _create_search_job(segment, city)
+            return redirect(url_for("prospecting_tools.prospecting", segment=segment, city=city, job_id=job_id))
+        except Exception:
+            current_app.logger.exception("Não foi possível iniciar tarefa de prospecção")
+            error = "Não consegui iniciar a busca agora. Tente novamente em instantes."
+
+    if job_id:
+        _ensure_jobs()
+        db, _, _ = _db_helpers()
+        with db() as conn:
+            job = conn.execute(
+                "SELECT * FROM prospecting_jobs WHERE id=%s",
+                (job_id,),
+            ).fetchone()
+        if job:
+            # Only render a job for the same search terms encoded in the current page.
+            segment = job["segment"]
+            city = job["city"]
+            searched = True
+            job_status = job["status"]
+            job_message = job["message"]
+            error = job_message if job_status == "failed" else ""
+            cache_key = job["cache_key"] or ""
+            if job_status == "done" and cache_key:
+                results = _cached_results(cache_key) or []
+                search_source = "OpenStreetMap"
+                cached = False
+                if not results and not error:
+                    error = job_message or "A pesquisa não retornou empresas."
+            elif job_status in ("queued", "running"):
+                error = ""
+        else:
+            error = "Esta busca expirou ou não foi encontrada. Faça uma nova pesquisa."
+            searched = True
+    if segment and city:
         query_text = f"{segment} {city}"
         maps_url = "https://www.google.com/maps/search/?api=1&query=" + quote_plus(query_text)
         google_url = "https://www.google.com/search?q=" + quote_plus(f"{segment} empresas em {city}")
@@ -337,18 +501,6 @@ def prospecting():
             "new_lead", segment=segment, city=city,
             source="Pesquisa assistida (revisão manual)",
         )
-        try:
-            cache_key, clean_city, results, source_kind = _get_results(segment, city)
-            search_source = "OpenStreetMap"
-            cached = source_kind == "cache"
-            city = clean_city + (", " + request.args.get("city", "").split(",", 1)[1].strip() if "," in request.args.get("city", "") else "")
-            if not results:
-                error = "Nenhuma empresa com nome e categoria compatíveis foi encontrada nesta pesquisa. Confira os links externos ou tente um segmento mais específico."
-        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
-            current_app.logger.warning("Falha na busca OpenStreetMap: %s", exc)
-            error = "A fonte pública não respondeu. Aguarde e tente novamente ou use os links de pesquisa abaixo."
-        except (RuntimeError, ValueError) as exc:
-            error = str(exc)
 
     return render_template(
         "prospecting.html",
@@ -356,7 +508,8 @@ def prospecting():
         maps_url=maps_url, google_url=google_url, bing_url=bing_url,
         register_url=register_url, results=results,
         cache_key=cache_key, search_source=search_source,
-        error=error, cached=cached,
+        error=error, cached=cached, job_id=job_id,
+        job_status=job_status, job_message=job_message,
     )
 
 
