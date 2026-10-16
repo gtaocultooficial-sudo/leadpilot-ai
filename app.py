@@ -1,4 +1,6 @@
 import csv
+import json
+import re
 import unicodedata
 from difflib import SequenceMatcher
 import hashlib
@@ -12,6 +14,7 @@ import psycopg
 from psycopg.rows import dict_row
 from flask import Flask, Response, flash, redirect, render_template, request, session, url_for
 from urllib.parse import quote_plus, urlparse
+from urllib.request import Request as URLRequest, urlopen
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 APP_USERNAME = os.environ.get("APP_USERNAME", "")
@@ -326,6 +329,37 @@ def _photon_contact_value(props, extra, *keys):
     return ""
 
 
+def _fetch_saved_osm_item(notes):
+    """Fetch the exact OSM record only when an imported lead has a saved item URL."""
+    match = re.search(
+        r"OpenStreetMap item:\s*https://www\.openstreetmap\.org/(node|way|relation)/(\d+)",
+        notes or "",
+    )
+    if not match:
+        return None
+    osm_kind, osm_id = match.groups()
+    source_url = f"https://www.openstreetmap.org/{osm_kind}/{osm_id}"
+    api_url = f"https://api.openstreetmap.org/api/0.6/{osm_kind}/{osm_id}.json"
+    req = URLRequest(
+        api_url,
+        headers={
+            "User-Agent": "LeadPilotAI/0.5 (+https://leadpilot-ai-5642.onrender.com)",
+            "Accept": "application/json",
+        },
+        method="GET",
+    )
+    with urlopen(req, timeout=8) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    element = next(
+        (item for item in payload.get("elements", [])
+         if str(item.get("id")) == osm_id and item.get("type") == osm_kind),
+        None,
+    )
+    if not element:
+        raise RuntimeError("A fonte não retornou o item original salvo neste lead.")
+    return {"url": source_url, "tags": element.get("tags") or {}, "type": osm_kind, "id": osm_id}
+
+
 @app.route("/leads/<int:lead_id>/research", methods=["GET", "POST"])
 @login_required
 def lead_research(lead_id):
@@ -375,137 +409,198 @@ def lead_research(lead_id):
     enrichment_source_checked = ""
     if request.method == "POST":
         try:
-            from prospecting import _photon_json, _photon_city_bbox
-
-            clean_city, bbox = _photon_city_bbox(city)
-            # Search the business name within the resolved municipality bounds.
-            # This avoids searching "company + city + Brazil" as one full-text phrase.
-            params = {
-                "q": company,
-                "bbox": bbox,
-                "countrycode": "br",
-                "limit": 10,
-                "lang": "default",
-            }
-            payload = _photon_json(params, timeout=9)
-            features = payload.get("features") or []
-            if not features:
-                # At most one fallback request, keeping the same spatial bounds.
-                fallback_params = dict(params)
-                fallback_params["q"] = f"{company} {clean_city}"
-                payload = _photon_json(fallback_params, timeout=7)
-                features = payload.get("features") or []
-
-            company_norm = _normalize_match_text(company)
-            city_norm = _normalize_match_text(clean_city)
-            candidates = []
-            mismatched_locations = []
-            for feature in features:
-                props = feature.get("properties") or {}
-                found_name = (props.get("name") or "").strip()
+            saved_item = _fetch_saved_osm_item(lead.get("notes") or "")
+            if saved_item:
+                # Use the exact OSM object attached during prospecting, rather than
+                # finding another business with the same name in a nearby city.
+                tags = saved_item["tags"]
+                found_name = (tags.get("name") or "").strip()
+                company_norm = _normalize_match_text(company)
                 found_norm = _normalize_match_text(found_name)
-                if not found_norm or not company_norm:
-                    continue
-                name_score = SequenceMatcher(None, company_norm, found_norm).ratio()
-                if company_norm in found_norm or found_norm in company_norm:
-                    if min(len(company_norm), len(found_norm)) >= 4:
-                        name_score = max(name_score, 0.84)
+                name_score = SequenceMatcher(None, company_norm, found_norm).ratio() if found_norm and company_norm else 0
+                if company_norm == found_norm:
+                    name_score = 1.0
+                elif company_norm in found_norm or found_norm in company_norm:
+                    name_score = max(name_score, 0.84)
 
-                # Treat city/locality as the municipality signal. A district name by
-                # itself is not proof that the establishment is in the requested city.
-                reported_city = (props.get("city") or props.get("locality") or "").strip()
-                found_city = _normalize_match_text(reported_city)
-                city_match = bool(found_city and city_norm and (
-                    found_city == city_norm or city_norm in found_city or found_city in city_norm
-                ))
-                if name_score < 0.72:
-                    continue
-                if reported_city and not city_match:
-                    # Same business name elsewhere is not a safe lead match.
-                    if name_score >= 0.84:
-                        mismatched_locations.append((found_name, reported_city, round(name_score * 100), feature))
-                    continue
-                if not city_match:
-                    # If the public record gives no municipality, don't guess from the name alone.
-                    continue
-                place_id = (props.get("osm_type"), props.get("osm_id"))
-                candidates.append((name_score + 0.08, feature, name_score, city_match, place_id))
-
-            if not candidates and mismatched_locations:
-                mismatched_locations.sort(key=lambda item: item[2], reverse=True)
-                found_name, reported_city, _score, wrong_feature = mismatched_locations[0]
-                wrong_props = wrong_feature.get("properties") or {}
-                enrichment_message = (
-                    f"A fonte encontrou o nome “{found_name}”, mas registrou o município como “{reported_city}”, "
-                    f"não “{clean_city}”. Nenhum dado foi sugerido nem alterado. "
-                    "Confira se é a mesma unidade antes de preencher o cadastro."
-                )
-                # Do not prefill the source confirmation field with a mismatched listing.
-                enrichment_source_checked = ""
-            elif not candidates:
-                enrichment_message = (
-                    "A fonte pública não encontrou uma correspondência confiável que também confirme o município pesquisado. "
-                    "Nenhum dado foi alterado. Confira o nome e a cidade nas pesquisas externas."
-                )
-            else:
-                candidates.sort(key=lambda item: item[0], reverse=True)
-                best = candidates[0]
-                ambiguous = (
-                    len(candidates) > 1
-                    and (best[0] - candidates[1][0]) < 0.015
-                    and best[4] != candidates[1][4]
-                )
-                if ambiguous:
+                if name_score < 0.80:
                     enrichment_message = (
-                        "A busca encontrou mais de uma empresa com nome muito parecido nesta região. "
-                        "Para evitar sugerir o contato da empresa errada, nenhum dado foi preenchido. "
-                        "Confira as pesquisas de mapa e site oficial abaixo."
+                        "O registro original salvo no lead não confirma o nome da empresa. "
+                        "Nenhum dado foi sugerido nem alterado; confira a fonte original."
                     )
                 else:
-                    _, feature, name_score, city_match, _place_id = best
-                    props = feature.get("properties") or {}
-                    extra = props.get("extra") or {}
-                    website = _photon_contact_value(props, extra, "website", "contact:website", "url")
-                    email = _photon_contact_value(props, extra, "email", "contact:email")
-                    phone = _photon_contact_value(props, extra, "phone", "contact:phone", "telephone")
-                    if website and not website.lower().startswith(("http://", "https://")):
-                        website = "https://" + website
-                    parsed_site = urlparse(website) if website else None
-                    if parsed_site and (parsed_site.scheme not in ("http", "https") or not parsed_site.netloc):
-                        website = ""
-                    if email and ("@" not in email or "." not in email.rsplit("@", 1)[-1] or any(ch.isspace() for ch in email)):
-                        email = ""
-                    phone = phone[:80]
-                    suggestions = {"website": website, "email": email, "phone": phone}
-
-                    osm_type = str(props.get("osm_type") or "").upper()
-                    osm_id = props.get("osm_id")
-                    osm_type_full = {"N": "node", "W": "way", "R": "relation"}.get(osm_type, osm_type.lower())
-                    source_url = (
-                        f"https://www.openstreetmap.org/{osm_type_full}/{osm_id}"
-                        if osm_type_full and osm_id else "https://www.openstreetmap.org/"
-                    )
-                    reported_city = props.get("city") or props.get("locality") or props.get("district") or ""
-                    enrichment_match = {
-                        "name": props.get("name") or company,
-                        "city": reported_city,
-                        "score": round(name_score * 100),
-                        "city_match": city_match,
-                        "source_url": source_url,
-                        "found_count": sum(bool(value) for value in suggestions.values()),
-                    }
-                    enrichment_source_checked = f"OpenStreetMap / Photon — {source_url}"
-                    if enrichment_match["found_count"]:
+                    reported_city = (
+                        tags.get("addr:city")
+                        or tags.get("addr:place")
+                        or tags.get("is_in:city")
+                        or ""
+                    ).strip()
+                    city_norm = _normalize_match_text(city.split(",")[0])
+                    found_city = _normalize_match_text(reported_city)
+                    city_match = bool(found_city and city_norm and (
+                        found_city == city_norm or city_norm in found_city or found_city in city_norm
+                    ))
+                    if reported_city and not city_match:
                         enrichment_message = (
-                            f"Encontramos {enrichment_match['found_count']} campo(s) comercial(is) público(s) em um resultado provável. "
-                            "Confira o nome, a cidade e cada valor antes de salvar."
+                            f"O registro original “{found_name}” informa o município “{reported_city}”, "
+                            f"não “{city.split(',')[0].strip()}”. Nenhum contato foi sugerido. "
+                            "Confirme a unidade no mapa antes de usar estes dados."
                         )
                     else:
+                        extra = tags
+                        website = _photon_contact_value({}, extra, "website", "contact:website", "url")
+                        email = _photon_contact_value({}, extra, "email", "contact:email")
+                        phone = _photon_contact_value({}, extra, "phone", "contact:phone", "telephone")
+                        if website and not website.lower().startswith(("http://", "https://")):
+                            website = "https://" + website
+                        parsed_site = urlparse(website) if website else None
+                        if parsed_site and (parsed_site.scheme not in ("http", "https") or not parsed_site.netloc):
+                            website = ""
+                        if email and ("@" not in email or "." not in email.rsplit("@", 1)[-1] or any(ch.isspace() for ch in email)):
+                            email = ""
+                        suggestions = {"website": website, "email": email, "phone": phone[:80]}
+                        enrichment_match = {
+                            "name": found_name or company,
+                            "city": reported_city or "Não especificado no registro",
+                            "score": round(name_score * 100),
+                            "city_match": city_match,
+                            "source_url": saved_item["url"],
+                            "found_count": sum(bool(value) for value in suggestions.values()),
+                        }
+                        if reported_city and city_match:
+                            enrichment_source_checked = f"OpenStreetMap — registro original: {saved_item['url']}"
+                        if enrichment_match["found_count"]:
+                            if reported_city and city_match:
+                                enrichment_message = (
+                                    f"Encontramos {enrichment_match['found_count']} campo(s) comercial(is) no registro original, "
+                                    "e o município coincide com o cadastro. Confira cada valor antes de salvar."
+                                )
+                            else:
+                                enrichment_message = (
+                                    f"O registro original contém {enrichment_match['found_count']} campo(s) comercial(is), "
+                                    "mas não informa explicitamente o município. Confira a localização manualmente; a fonte não foi marcada como verificada."
+                                )
+                        else:
+                            enrichment_message = (
+                                "O registro original foi localizado, mas não lista site, e-mail ou telefone. "
+                                "Nenhum contato foi inventado nem alterado."
+                            )
+            else:
+                # Leads imported before the OSM item ID was saved use the conservative
+                # Photon search, rejecting results whose municipality conflicts.
+                from prospecting import _photon_json, _photon_city_bbox
+
+                clean_city, bbox = _photon_city_bbox(city)
+                params = {
+                    "q": company,
+                    "bbox": bbox,
+                    "countrycode": "br",
+                    "limit": 10,
+                    "lang": "default",
+                }
+                payload = _photon_json(params, timeout=9)
+                features = payload.get("features") or []
+                if not features:
+                    fallback_params = dict(params)
+                    fallback_params["q"] = f"{company} {clean_city}"
+                    payload = _photon_json(fallback_params, timeout=7)
+                    features = payload.get("features") or []
+
+                company_norm = _normalize_match_text(company)
+                city_norm = _normalize_match_text(clean_city)
+                candidates = []
+                mismatched_locations = []
+                for feature in features:
+                    props = feature.get("properties") or {}
+                    found_name = (props.get("name") or "").strip()
+                    found_norm = _normalize_match_text(found_name)
+                    if not found_norm or not company_norm:
+                        continue
+                    name_score = SequenceMatcher(None, company_norm, found_norm).ratio()
+                    if company_norm in found_norm or found_norm in company_norm:
+                        if min(len(company_norm), len(found_norm)) >= 4:
+                            name_score = max(name_score, 0.84)
+                    reported_city = (props.get("city") or props.get("locality") or "").strip()
+                    found_city = _normalize_match_text(reported_city)
+                    city_match = bool(found_city and city_norm and (
+                        found_city == city_norm or city_norm in found_city or found_city in city_norm
+                    ))
+                    if name_score < 0.72:
+                        continue
+                    if reported_city and not city_match:
+                        if name_score >= 0.84:
+                            mismatched_locations.append((found_name, reported_city, round(name_score * 100)))
+                        continue
+                    if not city_match:
+                        continue
+                    candidates.append((name_score + 0.08, feature, name_score, city_match))
+
+                if not candidates and mismatched_locations:
+                    mismatched_locations.sort(key=lambda item: item[2], reverse=True)
+                    found_name, reported_city, _score = mismatched_locations[0]
+                    enrichment_message = (
+                        f"A fonte encontrou o nome “{found_name}”, mas registrou o município como “{reported_city}”, "
+                        f"não “{clean_city}”. Nenhum dado foi sugerido nem alterado. "
+                        "Confira se é a mesma unidade antes de preencher o cadastro."
+                    )
+                elif not candidates:
+                    enrichment_message = (
+                        "A fonte pública não encontrou uma correspondência confiável que também confirme o município pesquisado. "
+                        "Nenhum dado foi alterado. Confira o nome e a cidade nas pesquisas externas."
+                    )
+                else:
+                    candidates.sort(key=lambda item: item[0], reverse=True)
+                    best = candidates[0]
+                    ambiguous = (
+                        len(candidates) > 1
+                        and (best[0] - candidates[1][0]) < 0.015
+                        and (best[1].get("properties") or {}).get("osm_id") != (candidates[1][1].get("properties") or {}).get("osm_id")
+                    )
+                    if ambiguous:
                         enrichment_message = (
-                            "Encontramos uma correspondência provável pelo nome dentro da área pesquisada, "
-                            "mas a fonte não lista site, e-mail ou telefone. Nenhum contato foi inventado nem alterado."
+                            "A busca encontrou mais de uma empresa com nome muito parecido nesta região. "
+                            "Para evitar sugerir o contato da empresa errada, nenhum dado foi preenchido. "
+                            "Confira as pesquisas de mapa e site oficial abaixo."
                         )
-        except Exception as exc:
+                    else:
+                        _, feature, name_score, city_match = best
+                        props = feature.get("properties") or {}
+                        extra = props.get("extra") or {}
+                        website = _photon_contact_value(props, extra, "website", "contact:website", "url")
+                        email = _photon_contact_value(props, extra, "email", "contact:email")
+                        phone = _photon_contact_value(props, extra, "phone", "contact:phone", "telephone")
+                        if website and not website.lower().startswith(("http://", "https://")):
+                            website = "https://" + website
+                        parsed_site = urlparse(website) if website else None
+                        if parsed_site and (parsed_site.scheme not in ("http", "https") or not parsed_site.netloc):
+                            website = ""
+                        if email and ("@" not in email or "." not in email.rsplit("@", 1)[-1] or any(ch.isspace() for ch in email)):
+                            email = ""
+                        suggestions = {"website": website, "email": email, "phone": phone[:80]}
+                        props_osm_type = str(props.get("osm_type") or "").upper()
+                        props_osm_id = props.get("osm_id")
+                        props_osm_type_full = {"N": "node", "W": "way", "R": "relation"}.get(props_osm_type, props_osm_type.lower())
+                        source_url = f"https://www.openstreetmap.org/{props_osm_type_full}/{props_osm_id}" if props_osm_type_full and props_osm_id else "https://www.openstreetmap.org/"
+                        enrichment_match = {
+                            "name": props.get("name") or company,
+                            "city": reported_city,
+                            "score": round(name_score * 100),
+                            "city_match": city_match,
+                            "source_url": source_url,
+                            "found_count": sum(bool(value) for value in suggestions.values()),
+                        }
+                        if enrichment_match["found_count"]:
+                            enrichment_message = (
+                                f"Encontramos {enrichment_match['found_count']} campo(s) comercial(is) público(s) em um resultado provável. "
+                                "Confira o nome, a cidade e cada valor antes de salvar."
+                            )
+                            enrichment_source_checked = f"OpenStreetMap / Photon — {source_url}"
+                        else:
+                            enrichment_message = (
+                                "Encontramos uma correspondência provável pelo nome dentro da área pesquisada, "
+                                "mas a fonte não lista site, e-mail ou telefone. Nenhum contato foi inventado nem alterado."
+                            )
+        except Exception:
             app.logger.exception("Falha no enriquecimento público do lead id=%s", lead_id)
             enrichment_message = (
                 "A fonte pública não concluiu a consulta. Nenhum dado foi alterado. "
