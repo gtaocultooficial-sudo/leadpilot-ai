@@ -712,41 +712,95 @@ def import_selected():
     if not chosen or len(chosen) != len(selected):
         flash("A seleção não corresponde aos resultados registrados. Faça a pesquisa novamente.", "error")
         return redirect(url_for("prospecting_tools.prospecting"))
+
     now = now_iso()
-    added = skipped = 0
+    added = skipped = references_added = 0
+    target_city = query_city or row["city"]
+    target_segment = query_segment or row["segment"]
+
     with db() as conn:
         for item in chosen:
+            osm_url = (item.get("osm_url") or "").strip()
+            parsed_osm = urlparse(osm_url) if osm_url else None
+            valid_osm_ref = bool(
+                parsed_osm
+                and parsed_osm.scheme == "https"
+                and parsed_osm.netloc == "www.openstreetmap.org"
+                and re.fullmatch(r"/(?:node|way|relation)/\d+", parsed_osm.path)
+            )
+            osm_marker = f"OpenStreetMap item: {osm_url}" if valid_osm_ref else ""
+            item_address = (item.get("address") or "").strip()
+            note_parts = [item_address] if item_address else []
+            if osm_marker:
+                note_parts.append(osm_marker)
+            imported_notes = "\n".join(note_parts)
+
+            # Prefer an existing lead in the searched municipality so same-name
+            # businesses elsewhere are not mutated merely because their names match.
             exists = conn.execute(
-                "SELECT id, city, source, segment FROM leads WHERE lower(company)=lower(%s) LIMIT 1",
-                (item["name"],),
+                """SELECT id, city, source, segment, notes
+                   FROM leads WHERE lower(company)=lower(%s)
+                   ORDER BY CASE WHEN lower(COALESCE(city,''))=lower(%s) THEN 0 ELSE 1 END, id
+                   LIMIT 1""",
+                (item["name"], target_city),
             ).fetchone()
             if exists:
-                # Re-importing an already-imported OSM company from a more specific city query
-                # corrects the inaccurate provider city label instead of creating a duplicate.
-                target_city = query_city or row["city"]
-                target_segment = query_segment or row["segment"]
-                if (exists["source"] == "OpenStreetMap (ODbL)"
-                    and (exists["segment"] or "").casefold() == (target_segment or "").casefold()
-                    and (exists["city"] or "").casefold() != (target_city or "").casefold()):
+                current_notes = (exists.get("notes") or "").strip()
+                current_ref_match = re.search(
+                    r"OpenStreetMap item:\s*(https://www\.openstreetmap\.org/(?:node|way|relation)/\d+)",
+                    current_notes,
+                )
+                current_ref = current_ref_match.group(1) if current_ref_match else ""
+                same_city = (exists.get("city") or "").strip().casefold() == (target_city or "").strip().casefold()
+                same_segment = (exists.get("segment") or "").strip().casefold() == (target_segment or "").strip().casefold()
+                current_address = current_notes.split("\nOpenStreetMap item:", 1)[0].strip()
+                norm = lambda value: " ".join((value or "").casefold().split())
+                same_address = bool(item_address and current_address and norm(item_address) == norm(current_address))
+
+                if (
+                    exists.get("source") == "OpenStreetMap (ODbL)"
+                    and same_segment
+                    and valid_osm_ref
+                    and current_ref == osm_url
+                ):
+                    # The exact same OSM object is verified, so a location correction is safe.
+                    if not same_city:
+                        conn.execute(
+                            "UPDATE leads SET city=%s, updated_at=%s WHERE id=%s",
+                            (target_city, now, exists["id"]),
+                        )
+                    skipped += 1
+                elif (
+                    exists.get("source") == "OpenStreetMap (ODbL)"
+                    and same_city
+                    and same_segment
+                    and same_address
+                    and valid_osm_ref
+                    and not current_ref
+                ):
+                    # Attach an exact OSM id only when the saved address agrees with the selected listing.
+                    new_notes = (current_notes + "\n" + osm_marker).strip()
                     conn.execute(
-                        "UPDATE leads SET city=%s, updated_at=%s WHERE id=%s",
-                        (target_city, now, exists["id"]),
+                        "UPDATE leads SET notes=%s, updated_at=%s WHERE id=%s",
+                        (new_notes, now, exists["id"]),
                     )
+                    references_added += 1
                     skipped += 1
                 else:
                     skipped += 1
                 continue
+
             data = {
                 "company": item["name"],
                 "contact_name": "",
                 "email": item.get("email", ""),
                 "phone": item.get("phone", ""),
                 "website": item.get("website", ""),
-                "segment": query_segment or row["segment"],
-                "city": query_city or row["city"],
+                "segment": target_segment,
+                "city": target_city,
                 "source": "OpenStreetMap (ODbL)",
                 "need": "",
-                "notes": item.get("address", ""),
+                "notes": imported_notes,
                 "consent_basis": "Empresa listada publicamente; revisar pertinência antes de contato",
             }
             score = score_lead(data)
@@ -759,5 +813,9 @@ def import_selected():
                  score, data["consent_basis"], now, now),
             )
             added += 1
-    flash(f"Busca importada: {added} empresa(s) cadastrada(s); {skipped} duplicada(s) ignorada(s).", "success")
+    flash(
+        f"Busca importada: {added} empresa(s) cadastrada(s); "
+        f"{skipped} duplicada(s) ignorada(s); {references_added} origem(ns) exata(s) anexada(s).",
+        "success",
+    )
     return redirect(url_for("leads"))
