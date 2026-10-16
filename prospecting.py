@@ -154,19 +154,79 @@ def _build_query(segment, city):
 
 
 def _request_overpass(query, clean_city):
+    """Query one public OSM Overpass endpoint, with one fallback for outages only.
+
+    Do not switch endpoints to evade 429/403/406 responses; respect shared-service limits.
+    """
+    endpoints = [
+        "https://overpass-api.de/api/interpreter",
+        "https://lz4.overpass-api.de/api/interpreter",
+    ]
     body = urlencode({"data": query}).encode("utf-8")
-    req = Request(
-        OVERPASS_URL,
-        data=body,
-        headers={
-            "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": "LeadPilotAI/0.2 (business discovery; contact: owner via app settings)",
-            "Accept": "application/json",
-        },
-        method="POST",
-    )
-    with urlopen(req, timeout=35) as response:
-        payload = json.loads(response.read().decode("utf-8"))
+    last_transient_error = None
+    payload = None
+
+    for index, endpoint in enumerate(endpoints):
+        req = Request(
+            endpoint,
+            data=body,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "User-Agent": "LeadPilotAI/0.3 (+https://leadpilot-ai-5642.onrender.com)",
+                "Referer": "https://leadpilot-ai-5642.onrender.com/",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(req, timeout=22) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            break
+        except HTTPError as exc:
+            if exc.code == 429:
+                raise RuntimeError(
+                    "A fonte pública aplicou limite de consultas (HTTP 429). Aguarde pelo menos 30 segundos antes de tentar de novo."
+                ) from exc
+            if exc.code in (403, 406):
+                raise RuntimeError(
+                    f"A fonte pública recusou a consulta (HTTP {exc.code}). A busca foi interrompida para respeitar as regras do serviço."
+                ) from exc
+            if exc.code in (500, 502, 503, 504, 522, 524):
+                last_transient_error = exc
+                current_endpoint = endpoint
+                if index + 1 < len(endpoints):
+                    current_app.logger.warning(
+                        "Overpass temporariamente indisponível (%s, HTTP %s); tentando uma única instância alternativa.",
+                        current_endpoint, exc.code
+                    )
+                    continue
+                break
+            raise RuntimeError(f"A fonte pública respondeu com HTTP {exc.code}. Tente novamente mais tarde.") from exc
+        except (URLError, TimeoutError) as exc:
+            last_transient_error = exc
+            if index + 1 < len(endpoints):
+                current_app.logger.warning(
+                    "Falha temporária de conexão com Overpass (%s); tentando uma única instância alternativa.",
+                    type(exc).__name__
+                )
+                continue
+            break
+        except json.JSONDecodeError as exc:
+            last_transient_error = exc
+            if index + 1 < len(endpoints):
+                current_app.logger.warning("Overpass retornou resposta inválida; tentando uma única instância alternativa.")
+                continue
+            break
+
+    if payload is None:
+        current_app.logger.warning(
+            "Consulta Overpass falhou em ambas as tentativas. Último erro: %s",
+            last_transient_error
+        )
+        raise RuntimeError(
+            "As duas tentativas da fonte pública estão indisponíveis ou demoraram demais. Nenhum lead foi importado. Aguarde alguns minutos ou use os links de pesquisa pública abaixo."
+        ) from last_transient_error
+
     elements = payload.get("elements", [])
     found = []
     seen = set()
@@ -214,7 +274,6 @@ def _request_overpass(query, clean_city):
         if len(found) >= MAX_RESULTS:
             break
     return found
-
 
 def clean_city_for_display(tags, address):
     return tags.get("addr:place") or ""
@@ -287,7 +346,7 @@ def prospecting():
                 error = "Nenhuma empresa com nome e categoria compatíveis foi encontrada nesta pesquisa. Confira os links externos ou tente um segmento mais específico."
         except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
             current_app.logger.warning("Falha na busca OpenStreetMap: %s", exc)
-            error = "A fonte de dados está ocupada ou indisponível agora. Aguarde um pouco ou use os links de pesquisa abaixo."
+            error = "A fonte pública não respondeu. Aguarde e tente novamente ou use os links de pesquisa abaixo."
         except (RuntimeError, ValueError) as exc:
             error = str(exc)
 
