@@ -660,10 +660,25 @@ def lead_research(lead_id):
 
                 company_norm = _normalize_match_text(company)
                 city_norm = _normalize_match_text(clean_city)
+                ignored_urls = set(re.findall(
+                    r"OpenStreetMap ignored item:\s*(https://www\.openstreetmap\.org/(?:node|way|relation)/\d+)",
+                    lead.get("notes") or "",
+                ))
                 candidates = []
                 mismatched_locations = []
+                ignored_count = 0
                 for feature in features:
                     props = feature.get("properties") or {}
+                    osm_type = str(props.get("osm_type") or "").upper()
+                    osm_id = props.get("osm_id")
+                    osm_type_full = {"N": "node", "W": "way", "R": "relation"}.get(osm_type, osm_type.lower())
+                    feature_source_url = (
+                        f"https://www.openstreetmap.org/{osm_type_full}/{osm_id}"
+                        if osm_type_full and osm_id else ""
+                    )
+                    if feature_source_url and feature_source_url in ignored_urls:
+                        ignored_count += 1
+                        continue
                     found_name = (props.get("name") or "").strip()
                     found_norm = _normalize_match_text(found_name)
                     if not found_norm or not company_norm:
@@ -680,8 +695,11 @@ def lead_research(lead_id):
                     if name_score < 0.72:
                         continue
                     if reported_city and not city_match:
-                        if name_score >= 0.84:
-                            mismatched_locations.append((found_name, reported_city, round(name_score * 100)))
+                        if name_score >= 0.84 and feature_source_url:
+                            mismatched_locations.append((
+                                found_name, reported_city, round(name_score * 100),
+                                feature_source_url, props,
+                            ))
                         continue
                     if not city_match:
                         continue
@@ -689,17 +707,33 @@ def lead_research(lead_id):
 
                 if not candidates and mismatched_locations:
                     mismatched_locations.sort(key=lambda item: item[2], reverse=True)
-                    found_name, reported_city, _score = mismatched_locations[0]
+                    found_name, reported_city, name_score_int, source_url, mismatch_props = mismatched_locations[0]
                     enrichment_message = (
                         f"A fonte encontrou o nome “{found_name}”, mas registrou o município como “{reported_city}”, "
                         f"não “{clean_city}”. Nenhum dado foi sugerido nem alterado. "
-                        "Confira se é a mesma unidade antes de preencher o cadastro."
+                        "Você pode ignorar este registro para que ele não reapareça nas próximas consultas."
                     )
+                    enrichment_match = {
+                        "name": found_name,
+                        "city": reported_city,
+                        "score": name_score_int,
+                        "city_match": False,
+                        "source_url": source_url,
+                        "ignore_url": source_url,
+                        "found_count": 0,
+                    }
                 elif not candidates:
-                    enrichment_message = (
-                        "A fonte pública não encontrou uma correspondência confiável que também confirme o município pesquisado. "
-                        "Nenhum dado foi alterado. Confira o nome e a cidade nas pesquisas externas."
-                    )
+                    if ignored_count:
+                        enrichment_message = (
+                            "O resultado de outra cidade que você rejeitou foi ignorado. "
+                            "A fonte não encontrou outra correspondência suficientemente confiável em Guarulhos; "
+                            "nenhum dado foi alterado. Confira as pesquisas externas abaixo."
+                        )
+                    else:
+                        enrichment_message = (
+                            "A fonte pública não encontrou uma correspondência confiável que também confirme o município pesquisado. "
+                            "Nenhum dado foi alterado. Confira o nome e a cidade nas pesquisas externas."
+                        )
                 else:
                     candidates.sort(key=lambda item: item[0], reverse=True)
                     best = candidates[0]
@@ -810,6 +844,52 @@ def discard_research_source(lead_id):
     flash(
         "Referência geográfica incorreta desassociada. A empresa e os demais dados foram preservados; "
         "você pode fazer uma nova consulta por cidade.",
+        "success",
+    )
+    return redirect(url_for("lead_research", lead_id=lead_id))
+
+
+@app.route("/leads/<int:lead_id>/research/ignore-result", methods=["POST"])
+@login_required
+def ignore_research_result(lead_id):
+    """Remember one rejected public listing so repeated lookups skip that wrong-city item."""
+    source_url = request.form.get("source_url", "").strip()
+    parsed = urlparse(source_url)
+    valid_source = bool(
+        parsed.scheme == "https"
+        and parsed.netloc == "www.openstreetmap.org"
+        and re.fullmatch(r"/(?:node|way|relation)/\d+", parsed.path)
+    )
+    if not valid_source:
+        flash("A referência enviada não é um item válido do OpenStreetMap.", "error")
+        return redirect(url_for("lead_research", lead_id=lead_id))
+
+    now = now_iso()
+    with db() as conn:
+        existing = conn.execute("SELECT * FROM leads WHERE id=%s", (lead_id,)).fetchone()
+        if not existing:
+            flash("Lead não encontrado.", "error")
+            return redirect(url_for("leads"))
+        notes = (existing.get("notes") or "").strip()
+        already = re.search(
+            r"OpenStreetMap ignored item:\s*" + re.escape(source_url),
+            notes,
+        )
+        if already:
+            flash("Essa referência já foi excluída das próximas consultas.", "success")
+            return redirect(url_for("lead_research", lead_id=lead_id))
+        audit = (
+            f"OpenStreetMap ignored item: {source_url}\n"
+            f"[Revisão de fonte {now}] Resultado público ignorado por divergência de município. "
+            "Lead e dados comerciais preservados."
+        )
+        new_notes = (notes + "\n" + audit).strip() if notes else audit
+        conn.execute(
+            "UPDATE leads SET notes=%s, updated_at=%s WHERE id=%s",
+            (new_notes, now, lead_id),
+        )
+    flash(
+        "Resultado de outra cidade excluído das próximas consultas. O lead e seus contatos foram preservados.",
         "success",
     )
     return redirect(url_for("lead_research", lead_id=lead_id))
