@@ -59,7 +59,14 @@
     <tr>
       <td><input type="checkbox" name="selected" value="{{ item.osm_key }}" aria-label="Selecionar {{ item.name }}" style="width:auto"></td>
       <td><strong>{{ item.name }}</strong>{% if item.tags %}<small>{{ item.tags }}</small>{% endif %}</td>
-      <td>{{ item.address or item.city or city }}</td>
+      <td>
+        {{ item.address or item.source_city or item.city or city }}
+        {% if item.city_verified %}
+          <small>Município confirmado na fonte: {{ item.source_city }}</small>
+        {% else %}
+          <small>Município não informado pela fonte; confirme antes de importar</small>
+        {% endif %}
+      </td>
       <td>{% if item.website %}<a href="{{ item.website }}" target="_blank" rel="noopener noreferrer">Site ↗</a>{% endif %}{% if item.phone %}<small>{{ item.phone }}</small>{% endif %}{% if item.email %}<small>{{ item.email }}</small>{% endif %}{% if not item.website and not item.phone and not item.email %}<small>Sem contato listado</small>{% endif %}</td>
       <td><a href="{{ item.osm_url }}" target="_blank" rel="noopener noreferrer">OpenStreetMap ↗</a></td>
     </tr>
