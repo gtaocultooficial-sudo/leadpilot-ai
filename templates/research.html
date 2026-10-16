@@ -36,11 +36,18 @@
   {% endif %}
   {% if enrichment_match %}
     <div class="notice" style="margin-top:14px">
-      <strong>Resultado provável:</strong> {{ enrichment_match.name }}
-      {% if enrichment_match.city %} · {{ enrichment_match.city }}{% endif %}
+      {% if enrichment_match.city_match %}
+        <strong>Empresa e município conferidos:</strong>
+      {% else %}
+        <strong>Registro localizado; município não confirmado:</strong>
+      {% endif %}
+      {{ enrichment_match.name }}
+      · Município: {{ enrichment_match.city or "Não especificado no registro" }}
       · Correspondência do nome: {{ enrichment_match.score }}%.
-      <p style="margin:8px 0 0">Confira a localização e os dados antes de salvar. <a href="{{ enrichment_match.source_url }}" target="_blank" rel="noopener noreferrer">Ver item original no OpenStreetMap ↗</a></p>
-      {% if not enrichment_match.city_match and enrichment_match.city %}<p>Confirme manualmente a cidade: a fonte não confirmou uma correspondência exata de localização.</p>{% endif %}
+      {% if enrichment_match.location_method %}<p style="margin:8px 0 0">Verificação de localização: {{ enrichment_match.location_method }}.</p>{% endif %}
+      {% if enrichment_match.address %}<p style="margin:8px 0 0">Endereço/localidade retornada pelas coordenadas: {{ enrichment_match.address }}</p>{% endif %}
+      <p style="margin:8px 0 0">Confira os detalhes na fonte original: <a href="{{ enrichment_match.source_url }}" target="_blank" rel="noopener noreferrer">Abrir item no OpenStreetMap ↗</a></p>
+      {% if not enrichment_match.city_match %}<p>A correspondência do nome, mesmo em 100%, não comprova que seja a unidade correta. Nenhum contato foi sugerido até confirmar a cidade.</p>{% endif %}
     </div>
     {% if enrichment_match.found_count %}
       <p class="muted" style="margin-top:12px">Os campos localizados foram sugeridos no formulário abaixo. Revise e clique em “Salvar dados no lead” para confirmar a gravação.</p>
