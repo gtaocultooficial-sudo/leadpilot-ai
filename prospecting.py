@@ -615,16 +615,112 @@ def _set_job(job_id, **values):
         )
 
 
-def _run_search_job(app_obj, job_id, segment, city):
+def _auto_import_results(segment, city, results):
+    """Import public business listings automatically without checkbox-by-checkbox review.
+
+    This does not send outreach. Unverified municipality data is clearly marked for review.
+    """
+    from app import db, now_iso, score_lead
+
+    now = now_iso()
+    added = skipped = unverified = invalid = 0
+    target_city = (city or "").strip()[:120]
+    target_segment = (segment or "").strip()[:80]
+
+    with db() as conn:
+        for item in results:
+            name = str(item.get("name") or "").strip()[:250]
+            osm_url = str(item.get("osm_url") or "").strip()
+            parsed_osm = urlparse(osm_url) if osm_url else None
+            valid_osm_ref = bool(
+                parsed_osm
+                and parsed_osm.scheme == "https"
+                and parsed_osm.netloc == "www.openstreetmap.org"
+                and re.fullmatch(r"/(?:node|way|relation)/\d+", parsed_osm.path)
+            )
+            if not name or not valid_osm_ref:
+                invalid += 1
+                continue
+
+            # Preserve existing manual entries; repeated runs skip the same business/city.
+            exists = conn.execute(
+                """SELECT id FROM leads
+                   WHERE lower(company)=lower(%s)
+                     AND lower(COALESCE(city,''))=lower(%s)
+                   LIMIT 1""",
+                (name, target_city),
+            ).fetchone()
+            if exists:
+                skipped += 1
+                continue
+
+            address = str(item.get("address") or "").strip()[:500]
+            note_parts = [address] if address else []
+            source_city = str(item.get("source_city") or item.get("city") or "").strip()[:120]
+            city_verified = bool(item.get("city_verified") and source_city)
+            if city_verified:
+                note_parts.append("Município informado pela fonte: " + source_city)
+            else:
+                note_parts.append("Município não confirmado pela fonte; conferir antes de abordar.")
+                unverified += 1
+            note_parts.append("OpenStreetMap item: " + osm_url)
+
+            website = str(item.get("website") or "").strip()[:500]
+            if website and not website.lower().startswith(("http://", "https://")):
+                website = "https://" + website
+            parsed_website = urlparse(website) if website else None
+            if parsed_website and (parsed_website.scheme not in ("http", "https") or not parsed_website.netloc):
+                website = ""
+
+            data = {
+                "company": name,
+                "contact_name": "",
+                "email": str(item.get("email") or "").strip()[:320],
+                "phone": str(item.get("phone") or "").strip()[:100],
+                "website": website,
+                "segment": target_segment,
+                "city": target_city,
+                "source": "OpenStreetMap (ODbL)",
+                "need": "",
+                "notes": "\n".join(note_parts),
+                "consent_basis": "Empresa listada em fonte pública; confirmar pertinência e canal antes de contato",
+            }
+            score = score_lead(data)
+            conn.execute(
+                """INSERT INTO leads
+                   (company,contact_name,email,phone,website,segment,city,source,need,notes,status,score,consent_basis,created_at,updated_at)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'Novo',%s,%s,%s,%s)""",
+                (data["company"], data["contact_name"], data["email"], data["phone"],
+                 data["website"], data["segment"], data["city"], data["source"], data["need"],
+                 data["notes"], score, data["consent_basis"], now, now),
+            )
+            added += 1
+
+    return {"added": added, "skipped": skipped, "unverified": unverified, "invalid": invalid}
+
+
+def _run_search_job(app_obj, job_id, segment, city, auto_import=False):
     # Executa chamadas de rede fora da requisição web para a página não ficar bloqueada.
     with app_obj.app_context():
-        _set_job(job_id, status="running", message="Consultando a fonte pública…")
+        initial_message = "Buscando e cadastrando automaticamente…" if auto_import else "Consultando a fonte pública…"
+        _set_job(job_id, status="running", message=initial_message)
         try:
             cache_key, _clean_city, results, _source_kind = _get_results(segment, city)
-            message = "" if results else (
-                "Nenhuma empresa compatível foi encontrada. "
-                "Tente outro termo ou confira as pesquisas externas."
-            )
+            if auto_import and results:
+                counts = _auto_import_results(segment, _clean_city, results)
+                message = (
+                    f"Piloto automático concluído: {counts['added']} nova(s) empresa(s) cadastrada(s); "
+                    f"{counts['skipped']} duplicada(s) ignorada(s); "
+                    f"{counts['unverified']} com município a conferir; {counts['invalid']} registro(s) inválido(s) ignorado(s). "
+                    "Nenhuma mensagem foi enviada."
+                )
+            elif auto_import:
+                message = "Piloto automático terminou, mas a pesquisa não encontrou empresas para cadastrar. Nenhuma mensagem foi enviada."
+            else:
+                message = "" if results else (
+                    "Nenhuma empresa compatível foi encontrada. "
+                    "Tente outro termo ou confira as pesquisas externas."
+                )
             _set_job(
                 job_id,
                 status="done",
@@ -647,7 +743,7 @@ def _run_search_job(app_obj, job_id, segment, city):
             )
 
 
-def _create_search_job(segment, city):
+def _create_search_job(segment, city, auto_import=False):
     _ensure_jobs()
     db, now_iso, _ = _db_helpers()
     job_id = uuid.uuid4().hex
@@ -662,7 +758,7 @@ def _create_search_job(segment, city):
     app_obj = current_app._get_current_object()
     threading.Thread(
         target=_run_search_job,
-        args=(app_obj, job_id, segment, city),
+        args=(app_obj, job_id, segment, city, auto_import),
         daemon=True,
         name=f"leadpilot-search-{job_id[:8]}",
     ).start()
@@ -676,8 +772,9 @@ def start_search():
     if not segment or not city:
         flash("Informe o segmento e a cidade para pesquisar.", "error")
         return redirect(url_for("prospecting_tools.prospecting"))
+    auto_import = request.form.get("mode") == "autopilot"
     try:
-        job_id = _create_search_job(segment, city)
+        job_id = _create_search_job(segment, city, auto_import=auto_import)
     except Exception:
         current_app.logger.exception("Não foi possível criar tarefa de prospecção")
         flash("Não consegui iniciar a busca agora. Tente novamente em instantes.", "error")
