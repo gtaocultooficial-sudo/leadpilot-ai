@@ -77,6 +77,22 @@ def init_db():
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_leads_company ON leads(company)")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS affiliate_products (
+                id BIGSERIAL PRIMARY KEY,
+                product_name TEXT NOT NULL,
+                platform TEXT NOT NULL,
+                product_url TEXT NOT NULL DEFAULT '',
+                affiliate_url TEXT NOT NULL DEFAULT '',
+                commission_note TEXT NOT NULL DEFAULT '',
+                price_note TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'Para pesquisar',
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_affiliate_products_platform ON affiliate_products(platform)")
 
 
 def now_iso():
@@ -2144,6 +2160,42 @@ def sample_csv():
 @app.route("/health")
 def health():
     return {"status": "ok", "app": "LeadPilot AI"}
+
+
+@app.route("/afiliados", methods=["GET", "POST"])
+@login_required
+def affiliate_products():
+    """Simple catalog for tracking affiliate offers; does not join programs or publish links."""
+    if request.method == "POST":
+        product_name = (request.form.get("product_name") or "").strip()
+        platform = (request.form.get("platform") or "").strip()
+        product_url = (request.form.get("product_url") or "").strip()
+        affiliate_url = (request.form.get("affiliate_url") or "").strip()
+        commission_note = (request.form.get("commission_note") or "").strip()
+        price_note = (request.form.get("price_note") or "").strip()
+        notes = (request.form.get("notes") or "").strip()
+        allowed = {"Hotmart", "Mercado Livre", "Amazon"}
+        if not product_name or platform not in allowed:
+            flash("Informe o nome do produto e selecione uma plataforma válida.", "error")
+            return redirect(url_for("affiliate_products"))
+        stamp = now_iso()
+        with db() as conn:
+            conn.execute("""
+                INSERT INTO affiliate_products
+                (product_name, platform, product_url, affiliate_url, commission_note, price_note, status, notes, created_at, updated_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """, (product_name, platform, product_url, affiliate_url, commission_note, price_note,
+                  "Para pesquisar", notes, stamp, stamp))
+        flash("Produto salvo no catálogo. Ele ainda precisa ser verificado e o link de afiliado deve ser seu.", "success")
+        return redirect(url_for("affiliate_products"))
+    with db() as conn:
+        products = conn.execute("SELECT * FROM affiliate_products ORDER BY created_at DESC, id DESC").fetchall()
+    platforms = [
+        {"name": "Hotmart", "url": "https://hotmart.com/pt-br/afiliados", "description": "Cursos e produtos digitais"},
+        {"name": "Mercado Livre", "url": "https://www.mercadolivre.com.br/l/afiliados-home", "description": "Produtos físicos elegíveis"},
+        {"name": "Amazon", "url": "https://associados.amazon.com.br/", "description": "Produtos físicos elegíveis"},
+    ]
+    return render_template("affiliates.html", products=products, platforms=platforms)
 
 
 from prospecting import bp as prospecting_bp
