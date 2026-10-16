@@ -146,10 +146,10 @@ def _build_query(segment, city):
         segment_re = re.escape(clean_segment).replace('"', r'\"')
         statements = [f'nwr["name"~"{segment_re}",i](area.searchArea);']
     query = (
-        '[out:json][timeout:25];'
+        '[out:json][timeout:12][maxsize:67108864];'
         f'area["boundary"="administrative"]["name"~"^{city_re}$",i]->.searchArea;'
         '(' + ''.join(statements) + ');'
-        f'out center tags {MAX_RESULTS};'
+        f'out center tags qt {MAX_RESULTS};'
     )
     return clean_city, query
 
@@ -159,9 +159,11 @@ def _request_overpass(query, clean_city):
 
     Do not switch endpoints to evade 429/403/406 responses; respect shared-service limits.
     """
+    # Use a genuinely independent public instance for fallback; overpass-api.de
+    # and lz4.overpass-api.de belong to the same service family.
     endpoints = [
         "https://overpass-api.de/api/interpreter",
-        "https://lz4.overpass-api.de/api/interpreter",
+        "https://overpass.private.coffee/api/interpreter",
     ]
     body = urlencode({"data": query}).encode("utf-8")
     last_transient_error = None
@@ -180,7 +182,7 @@ def _request_overpass(query, clean_city):
             method="POST",
         )
         try:
-            timeout_seconds = 7 if index == 0 else 5
+            timeout_seconds = 10 if index == 0 else 8
             with urlopen(req, timeout=timeout_seconds) as response:
                 payload = json.loads(response.read().decode("utf-8"))
             break
