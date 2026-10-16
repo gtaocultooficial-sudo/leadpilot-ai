@@ -9,7 +9,7 @@ from functools import wraps
 import psycopg
 from psycopg.rows import dict_row
 from flask import Flask, Response, flash, redirect, render_template, request, session, url_for
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 APP_USERNAME = os.environ.get("APP_USERNAME", "")
@@ -355,6 +355,61 @@ def lead_research(lead_id):
         "research.html", lead=lead, research_links=research_links,
         base_query=base_query
     )
+
+
+@app.route("/leads/<int:lead_id>/research/save", methods=["POST"])
+@login_required
+def save_research_data(lead_id):
+    fields = ["website", "email", "phone"]
+    data = {key: request.form.get(key, "").strip() for key in fields}
+    source_checked = request.form.get("checked_source", "").strip()[:240]
+    research_note = request.form.get("research_note", "").strip()[:1000]
+
+    if not source_checked:
+        flash("Informe a fonte onde você confirmou os dados (por exemplo, site oficial ou Google Maps).", "error")
+        return redirect(url_for("lead_research", lead_id=lead_id))
+
+    website = data["website"]
+    if website:
+        parsed = urlparse(website)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            flash("O site precisa começar com https:// ou http:// e ter um domínio válido.", "error")
+            return redirect(url_for("lead_research", lead_id=lead_id))
+
+    email = data["email"]
+    if email and ("@" not in email or "." not in email.rsplit("@", 1)[-1] or any(ch.isspace() for ch in email)):
+        flash("Confira o formato do e-mail comercial.", "error")
+        return redirect(url_for("lead_research", lead_id=lead_id))
+
+    if len(data["phone"]) > 80:
+        flash("O telefone deve ter até 80 caracteres.", "error")
+        return redirect(url_for("lead_research", lead_id=lead_id))
+
+    now = now_iso()
+    with db() as conn:
+        existing = conn.execute("SELECT * FROM leads WHERE id=%s", (lead_id,)).fetchone()
+        if not existing:
+            flash("Lead não encontrado.", "error")
+            return redirect(url_for("leads"))
+
+        updated = dict(existing)
+        updated.update(data)
+        updated["source"] = existing.get("source") or "Pesquisa manual"
+        score = score_lead(updated)
+        audit = f"[Pesquisa comercial {now}] Fonte conferida: {source_checked}"
+        if research_note:
+            audit += f" | Observações: {research_note}"
+        old_notes = (existing.get("notes") or "").strip()
+        new_notes = (old_notes + "\n" + audit).strip() if old_notes else audit
+        conn.execute(
+            """UPDATE leads
+               SET website=%s, email=%s, phone=%s, notes=%s, score=%s, updated_at=%s
+               WHERE id=%s""",
+            (website, email, data["phone"], new_notes, score, now, lead_id),
+        )
+
+    flash("Dados comerciais salvos no lead e a fonte foi registrada nas notas.", "success")
+    return redirect(url_for("lead_research", lead_id=lead_id))
 
 
 @app.route("/leads/<int:lead_id>/message")
