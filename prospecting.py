@@ -283,14 +283,156 @@ def clean_city_for_display(tags, address):
     return tags.get("addr:place") or ""
 
 
+def _photon_json(params, timeout=8):
+    url = "https://photon.komoot.io/api/?" + urlencode(params)
+    req = Request(
+        url,
+        headers={
+            "User-Agent": "LeadPilotAI/0.4 (+https://leadpilot-ai-5642.onrender.com)",
+            "Accept": "application/geo+json, application/json",
+        },
+        method="GET",
+    )
+    with urlopen(req, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _photon_city_bbox(city):
+    """Resolve a city once, then use its boundary to find categorized OSM points."""
+    clean_city = city.split(",")[0].strip()
+    if not clean_city:
+        raise ValueError("Informe uma cidade, por exemplo: Guarulhos, SP.")
+    query = city.strip()
+    params = {
+        "q": query + ", Brasil" if "brasil" not in query.casefold() else query,
+        "layer": "city",
+        "limit": 5,
+        "lang": "pt",
+    }
+    payload = _photon_json(params, timeout=7)
+    features = payload.get("features") or []
+    if not features:
+        # One bounded fallback: search the city name without the state/country qualifier.
+        payload = _photon_json({"q": clean_city + ", Brasil", "layer": "city", "limit": 5, "lang": "pt"}, timeout=7)
+        features = payload.get("features") or []
+    if not features:
+        raise RuntimeError("Não consegui localizar essa cidade na fonte pública. Confira o nome e o estado.")
+    chosen = None
+    clean_norm = clean_city.casefold()
+    for feature in features:
+        props = feature.get("properties") or {}
+        name = (props.get("name") or "").strip()
+        if name.casefold() == clean_norm:
+            chosen = feature
+            break
+    if chosen is None:
+        chosen = features[0]
+    props = chosen.get("properties") or {}
+    coords = (chosen.get("geometry") or {}).get("coordinates") or []
+    extent = props.get("extent")
+    try:
+        if extent and len(extent) == 4:
+            min_lon, min_lat, max_lon, max_lat = [float(v) for v in extent]
+            # Guard against weird/wrong geocoder extents; use a smaller city-sized box.
+            if not (-180 <= min_lon < max_lon <= 180 and -90 <= min_lat < max_lat <= 90):
+                raise ValueError("limites inválidos")
+            if max_lon - min_lon > 1.5 or max_lat - min_lat > 1.5:
+                raise ValueError("limites administrativos grandes demais")
+        elif len(coords) >= 2:
+            lon, lat = float(coords[0]), float(coords[1])
+            min_lon, max_lon = lon - 0.12, lon + 0.12
+            min_lat, max_lat = lat - 0.12, lat + 0.12
+        else:
+            raise ValueError("coordenadas ausentes")
+    except (TypeError, ValueError):
+        if len(coords) < 2:
+            raise RuntimeError("A fonte não retornou coordenadas úteis para essa cidade.")
+        lon, lat = float(coords[0]), float(coords[1])
+        min_lon, max_lon = lon - 0.12, lon + 0.12
+        min_lat, max_lat = lat - 0.12, lat + 0.12
+    return clean_city, ",".join(f"{v:.6f}" for v in (min_lon, min_lat, max_lon, max_lat))
+
+
+def _photon_tags(segment):
+    tags = _search_tags(segment)
+    return [f"osm.{key}.{value}" for key, value in tags]
+
+
+def _request_photon(segment, city):
+    clean_city, bbox = _photon_city_bbox(city)
+    includes = _photon_tags(segment)
+    params = {
+        "bbox": bbox,
+        "limit": MAX_RESULTS,
+        "lang": "pt",
+    }
+    if includes:
+        # Photon allows a place-type-only query when an include filter is present.
+        params["include"] = ",".join(includes)
+    else:
+        # For unsupported segments, search place names within the selected city bounds.
+        params["q"] = segment.strip()
+    payload = _photon_json(params, timeout=10)
+    features = payload.get("features") or []
+    found = []
+    seen = set()
+    for feature in features:
+        props = feature.get("properties") or {}
+        name = (props.get("name") or "").strip()
+        osm_type = str(props.get("osm_type") or "").upper()
+        osm_id = props.get("osm_id")
+        if not name or not osm_type or not osm_id:
+            continue
+        key = f"{osm_type}/{osm_id}"
+        if key in seen:
+            continue
+        seen.add(key)
+        street = (props.get("street") or "").strip()
+        number = (props.get("housenumber") or "").strip()
+        district = (props.get("district") or props.get("locality") or "").strip()
+        address = ", ".join(part for part in [
+            " ".join(part for part in (street, number) if part),
+            district,
+        ] if part)
+        extra = props.get("extra") or {}
+        website = str(extra.get("website") or extra.get("contact:website") or "").strip()
+        if website and not website.lower().startswith(("http://", "https://")):
+            website = "https://" + website
+        parsed_website = urlparse(website) if website else None
+        if parsed_website and (parsed_website.scheme not in ("http", "https") or not parsed_website.netloc):
+            website = ""
+        phone = str(extra.get("phone") or extra.get("contact:phone") or "").strip()
+        email = str(extra.get("email") or extra.get("contact:email") or "").strip()
+        osm_type_full = {"N": "node", "W": "way", "R": "relation"}.get(osm_type, osm_type.lower())
+        found.append({
+            "osm_key": key,
+            "name": name,
+            "website": website,
+            "phone": phone,
+            "email": email,
+            "address": address,
+            "city": props.get("city") or props.get("name") if props.get("osm_key") == "place" else (props.get("city") or ""),
+            "lat": ((feature.get("geometry") or {}).get("coordinates") or [None, None])[1],
+            "lon": ((feature.get("geometry") or {}).get("coordinates") or [None, None])[0],
+            "osm_url": f"https://www.openstreetmap.org/{osm_type_full}/{osm_id}",
+            "tags": f"{props.get('osm_key') or ''}: {props.get('osm_value') or ''}".strip(": "),
+        })
+        if len(found) >= MAX_RESULTS:
+            break
+    return clean_city, found
+
+
 def _get_results(segment, city):
     _ensure_cache()
-    clean_city, query = _build_query(segment, city)
-    cache_key = hashlib.sha256(f"{segment.casefold()}|{clean_city.casefold()}".encode("utf-8")).hexdigest()
+    clean_city = city.split(",")[0].strip()
+    if not clean_city:
+        raise ValueError("Informe uma cidade, por exemplo: Guarulhos, SP.")
+    cache_key = hashlib.sha256(f"{segment.casefold()}|{city.casefold().strip()}".encode("utf-8")).hexdigest()
     cached = _cached_results(cache_key)
     if cached is not None:
         return cache_key, clean_city, cached, "cache"
-    # Small global spacing between uncached calls to avoid hammering the shared service.
+
+    # Re-use a shared-service throttle so a user cannot repeatedly call public APIs.
     db, now_iso, _ = _db_helpers()
     with db() as conn:
         throttle = conn.execute(
@@ -306,7 +448,6 @@ def _get_results(segment, city):
                 raise RuntimeError(f"Por favor aguarde {int(wait) + 1} segundos antes de fazer outra busca.")
         except ValueError:
             pass
-    # Save attempt timestamp before contacting the public service.
     with db() as conn:
         conn.execute(
             """INSERT INTO prospecting_cache(cache_key,segment,city,fetched_at,results_json)
@@ -314,96 +455,20 @@ def _get_results(segment, city):
                ON CONFLICT(cache_key) DO UPDATE SET fetched_at=EXCLUDED.fetched_at""",
             (clean_city, now_iso()),
         )
-    results = _request_overpass(query, clean_city)
-    _save_cache(cache_key, segment, clean_city, results)
-    return cache_key, clean_city, results, "live"
+    try:
+        result_city, results = _request_photon(segment, city)
+    except HTTPError as exc:
+        if exc.code == 429:
+            raise RuntimeError("O serviço público de busca aplicou limite de consultas. Aguarde alguns minutos antes de tentar de novo.") from exc
+        if exc.code in (403, 406):
+            raise RuntimeError(f"O serviço público recusou a consulta (HTTP {exc.code}). Use os links de pesquisa abaixo.") from exc
+        raise RuntimeError(f"O serviço público de busca respondeu com HTTP {exc.code}. Tente novamente mais tarde ou use os links abaixo.") from exc
+    except (URLError, TimeoutError, json.JSONDecodeError) as exc:
+        current_app.logger.warning("Photon indisponível (%s): %s", type(exc).__name__, str(exc)[:200])
+        raise RuntimeError("A fonte pública de empresas está indisponível ou demorou demais. Nenhum lead foi importado; tente mais tarde ou use os links abaixo.") from exc
 
-
-def _ensure_jobs():
-    db, _, _ = _db_helpers()
-    with db() as conn:
-        conn.execute("""CREATE TABLE IF NOT EXISTS prospecting_jobs (
-            id TEXT PRIMARY KEY,
-            segment TEXT NOT NULL,
-            city TEXT NOT NULL,
-            status TEXT NOT NULL,
-            cache_key TEXT NOT NULL DEFAULT '',
-            result_count INTEGER NOT NULL DEFAULT 0,
-            message TEXT NOT NULL DEFAULT '',
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )""")
-
-
-def _set_job(job_id, **values):
-    db, now_iso, _ = _db_helpers()
-    allowed = {"status", "cache_key", "result_count", "message"}
-    assignments = []
-    params = []
-    for key, value in values.items():
-        if key not in allowed:
-            raise ValueError("Campo de tarefa inválido.")
-        assignments.append(f"{key}=%s")
-        params.append(value)
-    assignments.append("updated_at=%s")
-    params.append(now_iso())
-    params.append(job_id)
-    with db() as conn:
-        conn.execute(
-            "UPDATE prospecting_jobs SET " + ", ".join(assignments) + " WHERE id=%s",
-            params,
-        )
-
-
-def _run_search_job(app_obj, job_id, segment, city):
-    # Execute network I/O outside the request, so the browser can show progress.
-    with app_obj.app_context():
-        _set_job(job_id, status="running", message="Consultando a fonte pública…")
-        try:
-            cache_key, _clean_city, results, source_kind = _get_results(segment, city)
-            message = "" if results else (
-                "Nenhuma empresa compatível foi encontrada nesta pesquisa. "
-                "Tente outro termo ou confira as pesquisas externas."
-            )
-            _set_job(
-                job_id,
-                status="done",
-                cache_key=cache_key,
-                result_count=len(results),
-                message=message,
-            )
-        except Exception as exc:
-            app_obj.logger.warning("Busca de prospecção falhou (%s): %s", job_id, str(exc)[:400])
-            _set_job(
-                job_id,
-                status="failed",
-                cache_key="",
-                result_count=0,
-                message=str(exc)[:500] or "Não foi possível concluir a busca.",
-            )
-
-
-def _create_search_job(segment, city):
-    from flask import current_app
-    _ensure_jobs()
-    db, now_iso, _ = _db_helpers()
-    job_id = uuid.uuid4().hex
-    now = now_iso()
-    with db() as conn:
-        conn.execute(
-            """INSERT INTO prospecting_jobs
-               (id,segment,city,status,cache_key,result_count,message,created_at,updated_at)
-               VALUES(%s,%s,%s,'queued','',0,'Preparando busca…',%s,%s)""",
-            (job_id, segment, city, now, now),
-        )
-    app_obj = current_app._get_current_object()
-    threading.Thread(
-        target=_run_search_job,
-        args=(app_obj, job_id, segment, city),
-        daemon=True,
-        name=f"leadpilot-search-{job_id[:8]}",
-    ).start()
-    return job_id
+    _save_cache(cache_key, segment, result_city, results)
+    return cache_key, result_city, results, "photon"
 
 
 @bp.route("/prospecting/start", methods=["POST"])
@@ -485,7 +550,7 @@ def prospecting():
             cache_key = job["cache_key"] or ""
             if job_status == "done" and cache_key:
                 results = _cached_results(cache_key) or []
-                search_source = "OpenStreetMap"
+                search_source = "Photon / OpenStreetMap"
                 cached = False
                 if not results and not error:
                     error = job_message or "A pesquisa não retornou empresas."
