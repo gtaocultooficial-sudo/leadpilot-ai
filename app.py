@@ -274,6 +274,7 @@ def _run_auto_research_job(app_obj, job_id):
                     no_match=0, errors=0,
                     message="Não há leads elegíveis sem e-mail/telefone e sem tentativa automática anterior."
                 )
+                _queue_auto_draft_followup(app_obj)
                 return
 
             for raw in candidates:
@@ -385,6 +386,7 @@ def _run_auto_research_job(app_obj, job_id):
                     f"{errors} erro(s) de consulta. Dados manuais foram preservados."
                 ),
             )
+            _queue_auto_draft_followup(app_obj)
         except Exception:
             app_obj.logger.exception("Auto research batch crashed for job %s", job_id)
             _update_auto_research_job(
@@ -594,6 +596,41 @@ def _run_auto_draft_job(app_obj, job_id):
                 skipped=skipped, errors=errors + 1,
                 message="A preparação em lote falhou. Nenhuma mensagem foi enviada automaticamente."
             )
+
+
+def _queue_auto_draft_followup(app_obj):
+    """Continue the sales workflow by queueing drafts after contact research."""
+    try:
+        _ensure_outreach_tables()
+        with db() as conn:
+            active = conn.execute(
+                """SELECT id FROM auto_draft_jobs
+                   WHERE status IN ('queued','running')
+                   ORDER BY created_at DESC LIMIT 1"""
+            ).fetchone()
+        if active:
+            return active["id"]
+
+        job_id = uuid.uuid4().hex
+        now = now_iso()
+        with db() as conn:
+            conn.execute(
+                """INSERT INTO auto_draft_jobs
+                   (id,status,total,processed,prepared,skipped,errors,message,created_at,updated_at)
+                   VALUES(%s,'queued',0,0,0,0,0,'Preparação automática após pesquisa de contatos…',%s,%s)""",
+                (job_id, now, now),
+            )
+        threading.Thread(
+            target=_run_auto_draft_job,
+            args=(app_obj, job_id),
+            daemon=True,
+            name=f"leadpilot-followup-drafts-{job_id[:8]}",
+        ).start()
+        app_obj.logger.info("Queued automatic outreach drafts after contact research: %s", job_id)
+        return job_id
+    except Exception as exc:
+        app_obj.logger.warning("Could not chain auto-drafting after contact research: %s", str(exc)[:250])
+        return ""
 
 
 @app.route("/leads/auto-draft/start", methods=["POST"])
