@@ -368,16 +368,19 @@ def _photon_tags(segment):
 
 def _request_photon(segment, city):
     clean_city, bbox = _photon_city_bbox(city)
-    # Search by the user-provided segment within the resolved city box.
-    # This avoids optional category-only filters that are not consistently exposed
-    # by public Photon instances.
+    # Use official Photon category filters for known business sectors.
+    # The public instance rejected lang=pt; supported language is now "default".
     params = {
-        "q": segment.strip(),
         "bbox": bbox,
         "countrycode": "br",
         "limit": MAX_RESULTS,
         "lang": "default",
     }
+    if includes:
+        params["include"] = ",".join(includes)
+    else:
+        # For categories outside the mapping, search by the supplied business term.
+        params["q"] = segment.strip()
     payload = _photon_json(params, timeout=10)
     features = payload.get("features") or []
     found = []
