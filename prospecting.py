@@ -708,11 +708,39 @@ def _run_search_job(app_obj, job_id, segment, city, auto_import=False):
             cache_key, _clean_city, results, _source_kind = _get_results(segment, city)
             if auto_import and results:
                 counts = _auto_import_results(segment, _clean_city, results)
+                contact_research_status = "Pesquisa de contatos não iniciada."
+                try:
+                    # Continue the same autopilot workflow: queue a verified contact lookup
+                    # for the newest imported/eligible leads, without sending outreach.
+                    from app import _ensure_auto_research_jobs, _run_auto_research_job, db, now_iso
+                    _ensure_auto_research_jobs()
+                    research_job_id = uuid.uuid4().hex
+                    research_now = now_iso()
+                    with db() as conn:
+                        conn.execute(
+                            """INSERT INTO auto_research_jobs
+                               (id,status,total,processed,enriched,no_match,errors,message,created_at,updated_at)
+                               VALUES(%s,'queued',0,0,0,0,0,'Pesquisa iniciada pelo piloto automático…',%s,%s)""",
+                            (research_job_id, research_now, research_now),
+                        )
+                    threading.Thread(
+                        target=_run_auto_research_job,
+                        args=(app_obj, research_job_id),
+                        daemon=True,
+                        name=f"leadpilot-auto-contact-{research_job_id[:8]}",
+                    ).start()
+                    contact_research_status = "A pesquisa de contatos públicos começou em segundo plano."
+                except Exception as research_exc:
+                    app_obj.logger.warning(
+                        "Could not queue follow-up contact research for prospecting job %s: %s",
+                        job_id, str(research_exc)[:250]
+                    )
+                    contact_research_status = "A etapa de contato não iniciou; use a pesquisa automática na página Leads."
                 message = (
-                    f"Piloto automático concluído: {counts['added']} nova(s) empresa(s) cadastrada(s); "
+                    f"Piloto automático: {counts['added']} nova(s) empresa(s) cadastrada(s); "
                     f"{counts['skipped']} duplicada(s) ignorada(s); "
                     f"{counts['unverified']} com município a conferir; {counts['invalid']} registro(s) inválido(s) ignorado(s). "
-                    "Nenhuma mensagem foi enviada."
+                    f"{contact_research_status} Nenhuma mensagem foi enviada."
                 )
             elif auto_import:
                 message = "Piloto automático terminou, mas a pesquisa não encontrou empresas para cadastrar. Nenhuma mensagem foi enviada."
