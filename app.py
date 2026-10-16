@@ -239,12 +239,17 @@ def leads():
         lead = dict(raw)
         has_direct = bool((lead.get("email") or "").strip() or (lead.get("phone") or "").strip())
         has_website = bool((lead.get("website") or "").strip())
+        needs_manual_research = "[Pesquisa pública sem contato]" in (lead.get("notes") or "")
+        lead["needs_manual_research"] = needs_manual_research
         if has_direct:
             lead["channel_label"] = "Canal direto disponível"
             lead["channel_hint"] = "E-mail ou telefone cadastrado"
         elif has_website:
             lead["channel_label"] = "Site para conferir"
             lead["channel_hint"] = "Confirme um canal comercial no site oficial"
+        elif needs_manual_research:
+            lead["channel_label"] = "Fonte consultada — sem contato"
+            lead["channel_hint"] = "Pesquise um diretório ou perfil comercial oficial"
         else:
             lead["channel_label"] = "Sem canal cadastrado"
             lead["channel_hint"] = "Pesquise um meio comercial público antes de abordar"
@@ -257,6 +262,8 @@ def leads():
         else:
             lead["quality_label"] = "Bem documentado"
             lead["next_step"] = "Revisar a abordagem"
+        if needs_manual_research and not has_direct and not has_website:
+            lead["next_step"] = "Pesquisar diretório comercial ou perfil oficial"
         decorated.append(lead)
     return render_template(
         "leads.html", rows=decorated, statuses=STATUSES, q=query,
