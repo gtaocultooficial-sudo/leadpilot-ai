@@ -203,6 +203,8 @@ def dashboard():
 def leads():
     query = request.args.get("q", "").strip()
     status = request.args.get("status", "").strip()
+    channel = request.args.get("channel", "").strip()
+    quality = request.args.get("quality", "").strip()
     sql = "SELECT * FROM leads WHERE TRUE"
     params = []
     if query:
@@ -211,11 +213,49 @@ def leads():
     if status and status in STATUSES:
         sql += " AND status=%s"
         params.append(status)
+    if channel == "direct":
+        sql += " AND (COALESCE(email,'')<>'' OR COALESCE(phone,'')<>'')"
+    elif channel == "website":
+        sql += " AND COALESCE(website,'')<>'' AND COALESCE(email,'')='' AND COALESCE(phone,'')=''"
+    elif channel == "missing":
+        sql += " AND COALESCE(website,'')='' AND COALESCE(email,'')='' AND COALESCE(phone,'')=''"
+    if quality == "incomplete":
+        sql += " AND score < 40"
+    elif quality == "review":
+        sql += " AND score >= 40 AND score < 70"
+    elif quality == "documented":
+        sql += " AND score >= 70"
     sql += " ORDER BY score DESC, updated_at DESC"
     with db() as conn:
         rows = conn.execute(sql, params).fetchall()
-    return render_template("leads.html", rows=rows, statuses=STATUSES, q=query, selected_status=status)
-
+    decorated = []
+    for raw in rows:
+        lead = dict(raw)
+        has_direct = bool((lead.get("email") or "").strip() or (lead.get("phone") or "").strip())
+        has_website = bool((lead.get("website") or "").strip())
+        if has_direct:
+            lead["channel_label"] = "Canal direto disponível"
+            lead["channel_hint"] = "E-mail ou telefone cadastrado"
+        elif has_website:
+            lead["channel_label"] = "Site para conferir"
+            lead["channel_hint"] = "Confirme um canal comercial no site oficial"
+        else:
+            lead["channel_label"] = "Sem canal cadastrado"
+            lead["channel_hint"] = "Pesquise um meio comercial público antes de abordar"
+        if lead["score"] < 40:
+            lead["quality_label"] = "Dados incompletos"
+            lead["next_step"] = "Completar os dados básicos"
+        elif lead["score"] < 70:
+            lead["quality_label"] = "Em verificação"
+            lead["next_step"] = "Confirmar pertinência e canal"
+        else:
+            lead["quality_label"] = "Bem documentado"
+            lead["next_step"] = "Revisar a abordagem"
+        decorated.append(lead)
+    return render_template(
+        "leads.html", rows=decorated, statuses=STATUSES, q=query,
+        selected_status=status, selected_channel=channel, selected_quality=quality
+    )
 
 @app.route("/leads/new", methods=["GET", "POST"])
 @login_required
