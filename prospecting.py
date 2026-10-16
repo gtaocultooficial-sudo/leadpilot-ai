@@ -319,7 +319,7 @@ def _photon_city_bbox(city):
         "countrycode": "br",
         "layer": "city",
         "limit": 5,
-        "lang": "pt",
+        "lang": "default",
     }
     payload = _photon_json(params, timeout=7)
     features = payload.get("features") or []
@@ -376,7 +376,7 @@ def _request_photon(segment, city):
         "bbox": bbox,
         "countrycode": "br",
         "limit": MAX_RESULTS,
-        "lang": "pt",
+        "lang": "default",
     }
     payload = _photon_json(params, timeout=10)
     features = payload.get("features") or []
@@ -739,4 +739,3 @@ def import_selected():
             added += 1
     flash(f"Busca importada: {added} empresa(s) cadastrada(s); {skipped} duplicada(s) ignorada(s).", "success")
     return redirect(url_for("leads"))
-
