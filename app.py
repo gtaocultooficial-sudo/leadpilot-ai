@@ -697,14 +697,30 @@ def outreach_queue():
     allowed = {"draft", "sent", "archived", "followup"}
     if state not in allowed:
         state = "draft"
+    bucket = request.args.get("bucket", "").strip()
+    if bucket not in {"overdue", "today", "upcoming"}:
+        bucket = ""
+    today_local = datetime.now(timezone.utc).astimezone(ZoneInfo("America/Sao_Paulo")).date().isoformat()
     with db() as conn:
         if state == "followup":
+            date_filter = ""
+            params = []
+            if bucket == "overdue":
+                date_filter = " AND d.follow_up_date < %s"
+                params.append(today_local)
+            elif bucket == "today":
+                date_filter = " AND d.follow_up_date = %s"
+                params.append(today_local)
+            elif bucket == "upcoming":
+                date_filter = " AND d.follow_up_date > %s"
+                params.append(today_local)
             rows = conn.execute(
                 """SELECT d.*, l.company, l.email, l.phone, l.city, l.segment, l.status AS lead_status
                    FROM outreach_drafts d
                    JOIN leads l ON l.id=d.lead_id
-                   WHERE d.status='sent' AND COALESCE(d.follow_up_date,'')<>''
-                   ORDER BY d.follow_up_date ASC, d.updated_at DESC, d.id DESC LIMIT 100"""
+                   WHERE d.status='sent' AND COALESCE(d.follow_up_date,'')<>''""" + date_filter + """
+                   ORDER BY d.follow_up_date ASC, d.updated_at DESC, d.id DESC LIMIT 100""",
+                tuple(params),
             ).fetchall()
         else:
             rows = conn.execute(
@@ -715,8 +731,7 @@ def outreach_queue():
                    ORDER BY d.updated_at DESC, d.id DESC LIMIT 100""",
                 (state,),
             ).fetchall()
-    today_local = datetime.now(timezone.utc).astimezone(ZoneInfo("America/Sao_Paulo")).date().isoformat()
-    return render_template("outreach.html", rows=rows, selected_state=state, today_local=today_local)
+    return render_template("outreach.html", rows=rows, selected_state=state, selected_bucket=bucket, today_local=today_local)
 
 
 @app.route("/outreach/<int:draft_id>/follow-up", methods=["POST"])
