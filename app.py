@@ -441,6 +441,279 @@ def auto_research_status(job_id):
     return dict(row)
 
 
+def _ensure_outreach_tables():
+    with db() as conn:
+        conn.execute("""CREATE TABLE IF NOT EXISTS outreach_drafts (
+            id BIGSERIAL PRIMARY KEY,
+            lead_id BIGINT NOT NULL,
+            channel TEXT NOT NULL,
+            recipient TEXT NOT NULL DEFAULT '',
+            subject TEXT NOT NULL DEFAULT '',
+            body TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'draft',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )""")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_outreach_status ON outreach_drafts(status, updated_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_outreach_lead ON outreach_drafts(lead_id)")
+        conn.execute("""CREATE TABLE IF NOT EXISTS auto_draft_jobs (
+            id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            total INTEGER NOT NULL DEFAULT 0,
+            processed INTEGER NOT NULL DEFAULT 0,
+            prepared INTEGER NOT NULL DEFAULT 0,
+            skipped INTEGER NOT NULL DEFAULT 0,
+            errors INTEGER NOT NULL DEFAULT 0,
+            message TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )""")
+
+
+def _update_auto_draft_job(job_id, **values):
+    allowed = {"status", "total", "processed", "prepared", "skipped", "errors", "message"}
+    assignments = []
+    params = []
+    for key, value in values.items():
+        if key not in allowed:
+            raise ValueError("Campo de tarefa inválido.")
+        assignments.append(f"{key}=%s")
+        params.append(value)
+    assignments.append("updated_at=%s")
+    params.extend([now_iso(), job_id])
+    with db() as conn:
+        conn.execute(
+            "UPDATE auto_draft_jobs SET " + ", ".join(assignments) + " WHERE id=%s",
+            params,
+        )
+
+
+def _run_auto_draft_job(app_obj, job_id):
+    """Prepare saved sales drafts from existing lead fields; never send messages."""
+    with app_obj.app_context():
+        processed = prepared = skipped = errors = 0
+        _update_auto_draft_job(
+            job_id, status="running", message="Selecionando leads com canal comercial público…"
+        )
+        try:
+            with db() as conn:
+                candidates = conn.execute(
+                    """SELECT l.*
+                       FROM leads l
+                       WHERE l.status IN ('Novo','Qualificado')
+                         AND (COALESCE(l.email,'')<>'' OR COALESCE(l.phone,'')<>'')
+                         AND NOT EXISTS (
+                             SELECT 1 FROM outreach_drafts d
+                             WHERE d.lead_id=l.id AND d.status IN ('draft','sent')
+                         )
+                       ORDER BY l.updated_at DESC, l.score DESC
+                       LIMIT 20"""
+                ).fetchall()
+            total = len(candidates)
+            _update_auto_draft_job(
+                job_id, total=total,
+                message=f"Preparando até {total} abordagem(ns), sem enviar nenhuma."
+            )
+            if not candidates:
+                _update_auto_draft_job(
+                    job_id, status="done", total=0, processed=0, prepared=0,
+                    skipped=0, errors=0,
+                    message="Nenhum lead elegível novo. É preciso ter e-mail ou telefone e status Novo/Qualificado."
+                )
+                return
+
+            for raw in candidates:
+                lead = dict(raw)
+                lead_id = lead["id"]
+                now = now_iso()
+                try:
+                    variants = make_message_variants(lead)
+                    if (lead.get("email") or "").strip():
+                        channel = "E-mail"
+                        variant = next(item for item in variants if item["key"] == "email")
+                        recipient = (lead.get("email") or "").strip()
+                    else:
+                        channel = "WhatsApp"
+                        variant = next(item for item in variants if item["key"] == "whatsapp")
+                        recipient = (lead.get("phone") or "").strip()
+
+                    with db() as conn:
+                        # Recheck inside the worker, so concurrent runs cannot create duplicates.
+                        exists = conn.execute(
+                            """SELECT id FROM outreach_drafts
+                               WHERE lead_id=%s AND status IN ('draft','sent') LIMIT 1""",
+                            (lead_id,),
+                        ).fetchone()
+                        if exists:
+                            skipped += 1
+                        else:
+                            conn.execute(
+                                """INSERT INTO outreach_drafts
+                                   (lead_id,channel,recipient,subject,body,status,created_at,updated_at)
+                                   VALUES(%s,%s,%s,%s,%s,'draft',%s,%s)""",
+                                (lead_id, channel, recipient, variant.get("subject",""),
+                                 variant["body"], now, now),
+                            )
+                            audit = (
+                                f"[Rascunho automático preparado] {now} | Canal: {channel} | "
+                                "Texto salvo para revisão; nenhuma mensagem foi enviada."
+                            )
+                            notes = (lead.get("notes") or "").strip()
+                            notes = (notes + "\n" + audit).strip() if notes else audit
+                            conn.execute(
+                                """UPDATE leads SET status='Contato preparado', notes=%s, updated_at=%s
+                                   WHERE id=%s AND status IN ('Novo','Qualificado')""",
+                                (notes, now, lead_id),
+                            )
+                            prepared += 1
+                except Exception as exc:
+                    errors += 1
+                    app_obj.logger.warning(
+                        "Could not prepare outreach draft for lead %s: %s",
+                        lead_id, str(exc)[:220]
+                    )
+                processed += 1
+                _update_auto_draft_job(
+                    job_id, processed=processed, prepared=prepared,
+                    skipped=skipped, errors=errors,
+                    message=f"Preparados {prepared}; duplicados ignorados {skipped}; falhas {errors} ({processed}/{total})."
+                )
+
+            _update_auto_draft_job(
+                job_id, status="done", processed=processed, prepared=prepared,
+                skipped=skipped, errors=errors,
+                message=(
+                    f"Concluído: {prepared} rascunho(s) salvo(s), {skipped} duplicado(s) ignorado(s), "
+                    f"{errors} falha(s). Nenhuma mensagem foi enviada."
+                )
+            )
+        except Exception:
+            app_obj.logger.exception("Automatic draft batch crashed: %s", job_id)
+            _update_auto_draft_job(
+                job_id, status="failed", processed=processed, prepared=prepared,
+                skipped=skipped, errors=errors + 1,
+                message="A preparação em lote falhou. Nenhuma mensagem foi enviada automaticamente."
+            )
+
+
+@app.route("/leads/auto-draft/start", methods=["POST"])
+@login_required
+def start_auto_draft():
+    _ensure_outreach_tables()
+    with db() as conn:
+        active = conn.execute(
+            """SELECT id FROM auto_draft_jobs
+               WHERE status IN ('queued','running')
+               ORDER BY created_at DESC LIMIT 1"""
+        ).fetchone()
+    if active:
+        return redirect(url_for("leads", auto_draft_job=active["id"]))
+
+    job_id = uuid.uuid4().hex
+    now = now_iso()
+    with db() as conn:
+        conn.execute(
+            """INSERT INTO auto_draft_jobs
+               (id,status,total,processed,prepared,skipped,errors,message,created_at,updated_at)
+               VALUES(%s,'queued',0,0,0,0,0,'Na fila para preparar abordagens…',%s,%s)""",
+            (job_id, now, now),
+        )
+    app_obj = app._get_current_object()
+    threading.Thread(
+        target=_run_auto_draft_job,
+        args=(app_obj, job_id),
+        daemon=True,
+        name=f"leadpilot-auto-draft-{job_id[:8]}",
+    ).start()
+    return redirect(url_for("leads", auto_draft_job=job_id))
+
+
+@app.route("/leads/auto-draft/status/<job_id>")
+@login_required
+def auto_draft_status(job_id):
+    _ensure_outreach_tables()
+    with db() as conn:
+        row = conn.execute(
+            """SELECT id,status,total,processed,prepared,skipped,errors,message
+               FROM auto_draft_jobs WHERE id=%s""",
+            (job_id,),
+        ).fetchone()
+    if not row:
+        return {"error": "Tarefa não encontrada."}, 404
+    return dict(row)
+
+
+@app.route("/outreach")
+@login_required
+def outreach_queue():
+    _ensure_outreach_tables()
+    state = request.args.get("status", "draft").strip()
+    allowed = {"draft", "sent", "archived"}
+    if state not in allowed:
+        state = "draft"
+    with db() as conn:
+        rows = conn.execute(
+            """SELECT d.*, l.company, l.email, l.phone, l.city, l.segment, l.status AS lead_status
+               FROM outreach_drafts d
+               JOIN leads l ON l.id=d.lead_id
+               WHERE d.status=%s
+               ORDER BY d.updated_at DESC, d.id DESC LIMIT 100""",
+            (state,),
+        ).fetchall()
+    return render_template("outreach.html", rows=rows, selected_state=state)
+
+
+@app.route("/outreach/<int:draft_id>/mark-sent", methods=["POST"])
+@login_required
+def mark_outreach_sent(draft_id):
+    _ensure_outreach_tables()
+    now = now_iso()
+    with db() as conn:
+        draft = conn.execute(
+            "SELECT * FROM outreach_drafts WHERE id=%s", (draft_id,)
+        ).fetchone()
+        if not draft:
+            flash("Rascunho não encontrado.", "error")
+            return redirect(url_for("outreach_queue"))
+        if draft["status"] != "draft":
+            flash("Só é possível confirmar o envio de um rascunho pendente.", "error")
+            return redirect(url_for("outreach_queue", status="draft"))
+        lead = conn.execute("SELECT * FROM leads WHERE id=%s", (draft["lead_id"],)).fetchone()
+        if not lead:
+            flash("Lead associado não encontrado; o rascunho foi preservado.", "error")
+            return redirect(url_for("outreach_queue"))
+        conn.execute(
+            "UPDATE outreach_drafts SET status='sent', updated_at=%s WHERE id=%s AND status='draft'",
+            (now, draft_id),
+        )
+        notes = (lead.get("notes") or "").strip()
+        audit = (
+            f"[Envio confirmado manualmente] {now} | Canal: {draft['channel']} | "
+            "Confirmação do usuário; o LeadPilot não enviou a mensagem."
+        )
+        notes = (notes + "\n" + audit).strip() if notes else audit
+        conn.execute(
+            "UPDATE leads SET status='Contatado', notes=%s, updated_at=%s WHERE id=%s",
+            (notes, now, draft["lead_id"]),
+        )
+    flash("Envio registrado manualmente. O LeadPilot não enviou a mensagem.", "success")
+    return redirect(url_for("outreach_queue", status="sent"))
+
+
+@app.route("/outreach/<int:draft_id>/archive", methods=["POST"])
+@login_required
+def archive_outreach_draft(draft_id):
+    _ensure_outreach_tables()
+    now = now_iso()
+    with db() as conn:
+        conn.execute(
+            "UPDATE outreach_drafts SET status='archived', updated_at=%s WHERE id=%s AND status='draft'",
+            (now, draft_id),
+        )
+    flash("Rascunho arquivado.", "success")
+    return redirect(url_for("outreach_queue", status="draft"))
+
+
 @app.route("/leads")
 @login_required
 def leads():
@@ -517,10 +790,22 @@ def leads():
                 (research_job_id,),
             ).fetchone()
 
+    draft_job_id = request.args.get("auto_draft_job", "").strip()[:64]
+    draft_job = None
+    if draft_job_id:
+        _ensure_outreach_tables()
+        with db() as conn:
+            draft_job = conn.execute(
+                """SELECT id,status,total,processed,prepared,skipped,errors,message
+                   FROM auto_draft_jobs WHERE id=%s""",
+                (draft_job_id,),
+            ).fetchone()
+
     return render_template(
         "leads.html", rows=decorated, statuses=STATUSES, q=query,
         selected_status=status, selected_channel=channel, selected_quality=quality,
         research_job=dict(research_job) if research_job else None,
+        draft_job=dict(draft_job) if draft_job else None,
     )
 
 @app.route("/leads/new", methods=["GET", "POST"])
