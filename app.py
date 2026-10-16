@@ -214,9 +214,9 @@ def dashboard():
         replied_leads = conn.execute("SELECT COUNT(*) AS n FROM leads WHERE status='Respondeu'").fetchone()["n"]
         contacted_leads = conn.execute("SELECT COUNT(DISTINCT lead_id) AS n FROM outreach_drafts WHERE status='sent'").fetchone()["n"]
         replied_after_contact = conn.execute("""SELECT COUNT(DISTINCT l.id) AS n FROM leads l
-            WHERE l.status='Respondeu' AND EXISTS (
+            WHERE l.notes ILIKE %s AND EXISTS (
                 SELECT 1 FROM outreach_drafts d WHERE d.lead_id=l.id AND d.status='sent'
-            )""").fetchone()["n"]
+            )""", ("%[Resposta comercial registrada%",)).fetchone()["n"]
         response_rate = round((replied_after_contact / contacted_leads) * 100, 1) if contacted_leads else 0
     return render_template("index.html", total=total, clients=clients, active=active, rows=rows, by_status=by_status, statuses=STATUSES, today_local=today_local, overdue_followups=overdue_followups, today_followups=today_followups, upcoming_followups=upcoming_followups, replied_leads=replied_leads, contacted_leads=contacted_leads, replied_after_contact=replied_after_contact, response_rate=response_rate)
 
