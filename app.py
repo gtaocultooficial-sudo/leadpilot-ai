@@ -529,25 +529,85 @@ def _find_overpass_business_match(company, city, ignored_urls=None):
 
 
 def _research_source_catalog(lead):
-    """Build trusted public search URLs for the lead's actual name and location."""
+    """Build trusted public search URLs for this lead's company and recorded location."""
     company = (lead.get("company") or "").strip()
     city = (lead.get("city") or "").strip()
     notes = (lead.get("notes") or "").strip()
     first_line = next((line.strip() for line in notes.splitlines() if line.strip()), "")
-    address = first_line if re.search(
+    address = ""
+    if re.search(
         r"\b(?:rua|r\.|avenida|av\.|alameda|al\.|travessa|tv\.|pra[cç]a|rodovia|estrada)\b",
         first_line,
         re.IGNORECASE,
-    ) else ""
-    location_parts = [part for part in (address, city)    research_links = _research_source_catalog(lead)  "key": "guiamais",
+    ):
+        address = first_line
+    exact_query = f'"{company}" "{city}"'
+    phone_query = f'"{company}" "{city}" (telefone OR WhatsApp OR contato)'
+    maps_query = " ".join(part for part in (company, address, city) if part)
+
+    return [
+        {
+            "key": "official_site",
+            "title": "Site oficial",
+            "description": "Procure o domínio oficial e confirme o endereço ou a área atendida.",
+            "url": "https://www.google.com/search?q=" + quote_plus(f'"{company}" "{city}" site oficial'),
+        },
+        {
+            "key": "exact_address",
+            "title": "Nome e endereço",
+            "description": "Ajuda a distinguir unidades com nomes parecidos; usa endereço apenas quando há um endereço registrado nas notas.",
+            "url": (
+                "https://www.google.com/search?q=" + quote_plus(f'{exact_query} "{address}" contato')
+                if address else
+                "https://www.google.com/search?q=" + quote_plus(f'{exact_query} endereço contato')
+            ),
+        },
+        {
+            "key": "phone_search",
+            "title": "Telefone e WhatsApp comercial",
+            "description": "Procure canais publicados pela própria empresa ou em um diretório identificável.",
+            "url": "https://www.google.com/search?q=" + quote_plus(phone_query),
+        },
+        {
+            "key": "maps",
+            "title": "Google Maps",
+            "description": "Confira nome, endereço e avaliações da unidade antes de associar contatos.",
+            "url": "https://www.google.com/maps/search/?api=1&query=" + quote_plus(maps_query),
+        },
+        {
+            "key": "bing",
+            "title": "Busca alternativa (Bing)",
+            "description": "Compare os resultados em outro mecanismo de busca.",
+            "url": "https://www.bing.com/search?q=" + quote_plus(f'{exact_query} contato comercial'),
+        },
+        {
+            "key": "social_profiles",
+            "title": "Perfis comerciais públicos",
+            "description": "Pesquise páginas públicas no Instagram e Facebook e confirme a cidade/endereço.",
+            "url": "https://www.google.com/search?q=" + quote_plus(f'site:instagram.com "{company}" "{city}" OR site:facebook.com "{company}" "{city}"'),
+        },
+        {
+            "key": "cylex",
+            "title": "Diretório Cylex",
+            "description": "Procure uma ficha e confira se a unidade e a localização correspondem.",
+            "url": "https://www.google.com/search?q=" + quote_plus(f'site:cylex.com.br "{company}" "{city}"'),
+        },
+        {
+            "key": "solutudo",
+            "title": "Diretório Solutudo",
+            "description": "Compare nome, cidade e endereço antes de registrar contatos.",
+            "url": "https://www.google.com/search?q=" + quote_plus(f'site:solutudo.com.br "{company}" "{city}"'),
+        },
+        {
+            "key": "guiamais",
             "title": "Diretório GuiaMais",
-            "description": "Verifique se há listagem comercial para essa empresa e cidade.",
+            "description": "Verifique se há listagem comercial para esta empresa e cidade.",
             "url": "https://www.google.com/search?q=" + quote_plus(f'site:guiamais.com.br "{company}" "{city}" telefone'),
         },
         {
             "key": "apontador",
             "title": "Diretório Apontador",
-            "description": "Compare nome, cidade e endereço com os outros resultados.",
+            "description": "Compare a ficha comercial com outras fontes.",
             "url": "https://www.google.com/search?q=" + quote_plus(f'site:apontador.com.br "{company}" "{city}"'),
         },
     ]
@@ -568,58 +628,7 @@ def lead_research(lead_id):
     segment = (lead.get("segment") or "").strip()
     base_query = " ".join(part for part in (company, segment, city) if part)
     quote = quote_plus
-    research_links = [
-        {
-            "title": "Site oficial",
-            "description": "Procure o domínio e confirme se pertence à empresa certa.",
-            "url": "https://www.google.com/search?q=" + quote(f'"{company}" {city} site oficial'),
-        },
-        {
-            "title": "Busca pelo nome e endereço exatos",
-            "description": "Ajuda a separar empresas com nomes parecidos e confirmar a unidade correta.",
-            "url": "https://www.google.com/search?q=" + quote(f'"{company}" "{city}" "{(lead.get("address") or "Av. Suplicy 741").strip()}" telefone contato'),
-        },
-        {
-            "title": "Busca em redes sociais",
-            "description": "Procure perfil comercial público vinculado ao nome e ao município; confirme o endereço antes de associar o perfil.",
-            "url": "https://www.google.com/search?q=" + quote(f'site:instagram.com "{company}" "{city}" OR site:facebook.com "{company}" "{city}"'),
-        },
-        {
-            "title": "Telefone e contato comercial",
-            "description": "Procure telefone comercial publicado e confira no site oficial.",
-            "url": "https://www.google.com/search?q=" + quote(f'"{company}" {city} telefone contato'),
-        },
-        {
-            "title": "Mapa e endereço",
-            "description": "Confira localização, nome e correspondência com a empresa cadastrada.",
-            "url": "https://www.google.com/maps/search/?api=1&query=" + quote(base_query),
-        },
-        {
-            "title": "Perfis comerciais",
-            "description": "Procure perfis públicos da empresa para confirmar identidade e atividade.",
-            "url": "https://www.google.com/search?q=" + quote(f'"{company}" {city} Instagram Facebook'),
-        },
-        {
-            "title": "Busca alternativa",
-            "description": "Compare resultados em outro buscador, se necessário.",
-            "url": "https://www.bing.com/search?q=" + quote(f'"{company}" {city} contato comercial'),
-        },
-        {
-            "title": "Diretório Cylex",
-            "description": "Verifique se uma ficha comercial coincide com o nome, endereço e atividade.",
-            "url": "https://www.google.com/search?q=" + quote(f'site:cylex.com.br/guarulhos "{company}" "{city}" telefone'),
-        },
-        {
-            "title": "Diretório Solutudo",
-            "description": "Compare o nome da empresa e o endereço antes de associar telefone ou e-mail.",
-            "url": "https://www.google.com/search?q=" + quote(f'site:solutudo.com.br/empresas/sp/guarulhos "{company}"'),
-        },
-        {
-            "title": "Diretório OpenAlfa",
-            "description": "Confira a listagem de estabelecimentos no entorno e os dados da fonte.",
-            "url": "https://www.google.com/search?q=" + quote(f'site:brazil-streets.openalfa.com "{company}" "{city}"'),
-        },
-    ]
+    research_links = _research_source_catalog(lead)
 
     suggestions = {"website": "", "email": "", "phone": ""}
     enrichment_match = None
