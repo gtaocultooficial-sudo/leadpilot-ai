@@ -26,13 +26,36 @@
 </section>
 
 <section class="panel">
+  <div class="section-head"><h2>Consultar fonte pública automaticamente</h2><span class="muted">Busca limitada e sem disparo de mensagens</span></div>
+  <p class="muted">O LeadPilot AI consulta o Photon, baseado em dados do OpenStreetMap, e procura uma correspondência pelo nome e pela cidade. Só sugere site, e-mail ou telefone que já estejam publicados na fonte; não completa nem adivinha contatos.</p>
+  <form method="post" action="{{ url_for('lead_research', lead_id=lead.id) }}">
+    <button class="button" type="submit">Buscar dados públicos da empresa</button>
+  </form>
+  {% if enrichment_message %}
+    <div class="flash {{ 'success' if enrichment_match and enrichment_match.found_count else 'error' }}" style="margin-top:14px">{{ enrichment_message }}</div>
+  {% endif %}
+  {% if enrichment_match %}
+    <div class="notice" style="margin-top:14px">
+      <strong>Resultado provável:</strong> {{ enrichment_match.name }}
+      {% if enrichment_match.city %} · {{ enrichment_match.city }}{% endif %}
+      · Correspondência do nome: {{ enrichment_match.score }}%.
+      <p style="margin:8px 0 0">Confira a localização e os dados antes de salvar. <a href="{{ enrichment_match.source_url }}" target="_blank" rel="noopener noreferrer">Ver item original no OpenStreetMap ↗</a></p>
+      {% if not enrichment_match.city_match and enrichment_match.city %}<p>Confirme manualmente a cidade: a fonte não confirmou uma correspondência exata de localização.</p>{% endif %}
+    </div>
+    {% if enrichment_match.found_count %}
+      <p class="muted" style="margin-top:12px">Os campos localizados foram sugeridos no formulário abaixo. Revise e clique em “Salvar dados no lead” para confirmar a gravação.</p>
+    {% endif %}
+  {% endif %}
+</section>
+
+<section class="panel">
   <div class="section-head"><h2>Salvar dados comerciais encontrados</h2><span class="muted">Preencha após conferir uma fonte</span></div>
   <p class="muted">Os resultados externos não são importados automaticamente. Cole aqui somente os dados comerciais que você confirmou para esta empresa; o sistema valida o formato e registra a fonte nas notas.</p>
   <form method="post" action="{{ url_for('save_research_data', lead_id=lead.id) }}" class="form-grid">
-    <label>Site oficial<input name="website" type="url" placeholder="https://empresa.com.br" value="{{ lead.website or '' }}"></label>
-    <label>E-mail comercial<input name="email" type="email" placeholder="contato@empresa.com.br" value="{{ lead.email or '' }}"></label>
-    <label>Telefone comercial<input name="phone" maxlength="80" placeholder="(11) 0000-0000" value="{{ lead.phone or '' }}"></label>
-    <label>Fonte conferida *<input name="checked_source" required maxlength="240" placeholder="Ex.: site oficial da empresa, página de contato"></label>
+    <label>Site oficial<input name="website" type="url" placeholder="https://empresa.com.br" value="{{ suggestions.get('website') or lead.website or '' }}"></label>
+    <label>E-mail comercial<input name="email" type="email" placeholder="contato@empresa.com.br" value="{{ suggestions.get('email') or lead.email or '' }}"></label>
+    <label>Telefone comercial<input name="phone" maxlength="80" placeholder="(11) 0000-0000" value="{{ suggestions.get('phone') or lead.phone or '' }}"></label>
+    <label>Fonte conferida *<input name="checked_source" required maxlength="240" value="{{ enrichment_source_checked or '' }}" placeholder="Ex.: site oficial da empresa, página de contato"></label>
     <label class="wide">Observações da verificação (opcional)<textarea name="research_note" rows="2" maxlength="1000" placeholder="Ex.: telefone exibido na página Contato, consultado hoje"></textarea></label>
     <div class="wide form-actions"><button class="button" type="submit">Salvar dados no lead</button><a class="button ghost" href="{{ url_for('edit_lead', lead_id=lead.id) }}">Abrir cadastro completo</a></div>
   </form>
