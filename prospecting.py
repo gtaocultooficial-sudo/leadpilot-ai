@@ -3,6 +3,7 @@ import hashlib
 import json
 import re
 import threading
+import unicodedata
 import uuid
 from datetime import datetime, timedelta, timezone
 from urllib.error import HTTPError, URLError
@@ -308,6 +309,23 @@ def _photon_json(params, timeout=8):
         raise
 
 
+def _normalize_city_name(value):
+    value = unicodedata.normalize("NFKD", str(value or "").casefold())
+    return "".join(char for char in value if not unicodedata.combining(char)).strip()
+
+
+BRAZIL_STATE_NAMES = {
+    "AC": "acre", "AL": "alagoas", "AP": "amapa", "AM": "amazonas",
+    "BA": "bahia", "CE": "ceara", "DF": "distrito federal", "ES": "espirito santo",
+    "GO": "goias", "MA": "maranhao", "MT": "mato grosso",
+    "MS": "mato grosso do sul", "MG": "minas gerais", "PA": "para",
+    "PB": "paraiba", "PR": "parana", "PE": "pernambuco", "PI": "piaui",
+    "RJ": "rio de janeiro", "RN": "rio grande do norte", "RS": "rio grande do sul",
+    "RO": "rondonia", "RR": "roraima", "SC": "santa catarina",
+    "SP": "sao paulo", "SE": "sergipe", "TO": "tocantins",
+}
+
+
 def _photon_city_bbox(city):
     """Resolve a city once, then use its boundary to find categorized OSM points."""
     clean_city = city.split(",")[0].strip()
@@ -326,15 +344,36 @@ def _photon_city_bbox(city):
     if not features:
         raise RuntimeError("Não consegui localizar essa cidade na fonte pública. Confira o nome e o estado.")
     chosen = None
-    clean_norm = clean_city.casefold()
+    clean_norm = _normalize_city_name(clean_city)
     for feature in features:
         props = feature.get("properties") or {}
         name = (props.get("name") or "").strip()
-        if name.casefold() == clean_norm:
-            chosen = feature
-            break
+        if _normalize_city_name(name) != clean_norm:
+            continue
+        country_code = (props.get("countrycode") or "").strip().casefold()
+        if country_code and country_code != "br":
+            continue
+        requested_region = city.split(",", 1)[1].strip() if "," in city else ""
+        actual_state = _normalize_city_name(props.get("state") or props.get("state_name") or "")
+        requested_state = ""
+        if len(requested_region) == 2:
+            requested_state = BRAZIL_STATE_NAMES.get(requested_region.upper(), "")
+        elif requested_region:
+            requested_state = _normalize_city_name(requested_region)
+        if requested_state and actual_state and requested_state != actual_state:
+            continue
+        if requested_state and not actual_state:
+            # Photon did not return enough administrative information to safely choose
+            # between same-name municipalities; do not silently pick a different place.
+            continue
+        chosen = feature
+        break
     if chosen is None:
-        chosen = features[0]
+        raise RuntimeError(
+            f"Não consegui confirmar a cidade exata “{clean_city}”"
+            + (f" no estado “{city.split(',', 1)[1].strip()}”" if "," in city else "")
+            + ". Confira o nome e a UF antes de pesquisar."
+        )
     props = chosen.get("properties") or {}
     coords = (chosen.get("geometry") or {}).get("coordinates") or []
     extent = props.get("extent")
@@ -386,9 +425,16 @@ def _request_photon(segment, city):
     features = payload.get("features") or []
     found = []
     seen = set()
+    rejected_city_labels = []
     for feature in features:
         props = feature.get("properties") or {}
         name = (props.get("name") or "").strip()
+        reported_city = (props.get("city") or props.get("municipality") or props.get("locality") or "").strip()
+        if reported_city and _normalize_city_name(reported_city) != _normalize_city_name(clean_city):
+            # Photon can return adjacent municipalities when the rectangle overlaps them.
+            # Exclude explicit city conflicts before they can be shown or imported.
+            rejected_city_labels.append(reported_city)
+            continue
         osm_type = str(props.get("osm_type") or "").upper()
         osm_id = props.get("osm_id")
         if not name or not osm_type or not osm_id:
@@ -421,7 +467,8 @@ def _request_photon(segment, city):
             "phone": phone,
             "email": email,
             "address": address,
-            "city": props.get("city") or props.get("name") if props.get("osm_key") == "place" else (props.get("city") or ""),
+            "city": reported_city,
+            "city_verified": bool(reported_city and _normalize_city_name(reported_city) == _normalize_city_name(clean_city)),
             "lat": ((feature.get("geometry") or {}).get("coordinates") or [None, None])[1],
             "lon": ((feature.get("geometry") or {}).get("coordinates") or [None, None])[0],
             "osm_url": f"https://www.openstreetmap.org/{osm_type_full}/{osm_id}",
@@ -429,6 +476,17 @@ def _request_photon(segment, city):
         })
         if len(found) >= MAX_RESULTS:
             break
+    if not found and rejected_city_labels:
+        rejected = sorted(set(rejected_city_labels), key=lambda value: (-rejected_city_labels.count(value), value))[0]
+        current_app.logger.warning(
+            "Photon returned only results for other municipalities; requested=%s, returned=%s",
+            clean_city, sorted(set(rejected_city_labels))
+        )
+        raise RuntimeError(
+            f"A fonte retornou empresas marcadas como “{rejected}”, não “{clean_city}”. "
+            "Esses resultados foram excluídos para evitar cadastrar empresas de outra cidade. "
+            "Tente outro segmento ou confira os links de pesquisa pública."
+        )
     return clean_city, found
 
 
