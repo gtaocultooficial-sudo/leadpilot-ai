@@ -747,6 +747,51 @@ def schedule_outreach_follow_up(draft_id):
     return redirect(url_for("outreach_queue", status="sent"))
 
 
+@app.route("/outreach/<int:draft_id>/response", methods=["POST"])
+@login_required
+def record_outreach_response(draft_id):
+    """Record a manually received reply and move its lead into the response stage."""
+    _ensure_outreach_tables()
+    response_note = request.form.get("response_note", "").strip()[:2000]
+    if not response_note:
+        flash("Descreva brevemente a resposta recebida antes de salvar.", "error")
+        return redirect(url_for("outreach_queue", status="followup"))
+
+    now = now_iso()
+    local_now = datetime.now(timezone.utc).astimezone(ZoneInfo("America/Sao_Paulo"))
+    audit = f"[Resposta comercial registrada {local_now.strftime('%Y-%m-%d %H:%M')}] {response_note}"
+    with db() as conn:
+        draft = conn.execute(
+            "SELECT id, lead_id, status FROM outreach_drafts WHERE id=%s",
+            (draft_id,),
+        ).fetchone()
+        if not draft:
+            flash("Abordagem não encontrada.", "error")
+            return redirect(url_for("outreach_queue"))
+        if draft["status"] != "sent":
+            flash("Registre respostas somente para abordagens com envio confirmado manualmente.", "error")
+            return redirect(url_for("outreach_queue", status="draft"))
+
+        lead = conn.execute("SELECT id, notes FROM leads WHERE id=%s", (draft["lead_id"],)).fetchone()
+        if not lead:
+            flash("Lead associado não encontrado; o registro foi preservado.", "error")
+            return redirect(url_for("outreach_queue", status="sent"))
+
+        old_notes = (lead.get("notes") or "").strip()
+        new_notes = (old_notes + "\n" + audit).strip() if old_notes else audit
+        conn.execute(
+            "UPDATE leads SET status='Respondeu', notes=%s, updated_at=%s WHERE id=%s",
+            (new_notes, now, lead["id"]),
+        )
+        conn.execute(
+            "UPDATE outreach_drafts SET follow_up_date='', follow_up_note='', updated_at=%s WHERE id=%s",
+            (now, draft_id),
+        )
+
+    flash("Resposta registrada no histórico do lead; status atualizado para Respondeu e retorno pendente removido.", "success")
+    return redirect(url_for("outreach_queue", status="sent"))
+
+
 @app.route("/outreach/<int:draft_id>/mark-sent", methods=["POST"])
 @login_required
 def mark_outreach_sent(draft_id):
