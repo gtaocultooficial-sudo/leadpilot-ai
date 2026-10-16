@@ -798,3 +798,24 @@ def import_selected():
                 "website": item.get("website", ""),
                 "segment": target_segment,
                 "city": target_city,
+                "source": "OpenStreetMap (ODbL)",
+                "need": "",
+                "notes": imported_notes,
+                "consent_basis": "Empresa listada publicamente; revisar pertinência antes de contato",
+            }
+            score = score_lead(data)
+            conn.execute(
+                """INSERT INTO leads
+                   (company,contact_name,email,phone,website,segment,city,source,need,notes,status,score,consent_basis,created_at,updated_at)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'Novo',%s,%s,%s,%s)""",
+                (data["company"], data["contact_name"], data["email"], data["phone"], data["website"],
+                 data["segment"], data["city"], data["source"], data["need"], data["notes"],
+                 score, data["consent_basis"], now, now),
+            )
+            added += 1
+    flash(
+        f"Busca importada: {added} empresa(s) cadastrada(s); "
+        f"{skipped} duplicada(s) ignorada(s); {references_added} origem(ns) exata(s) anexada(s).",
+        "success",
+    )
+    return redirect(url_for("leads"))
