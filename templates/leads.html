@@ -48,6 +48,53 @@
   {% endif %}
 </section>
 
+<section class="panel">
+  <div class="section-head">
+    <div>
+      <h2>IA: preparar abordagens comerciais</h2>
+      <p class="muted">Gera até 20 rascunhos personalizados para leads em Novo/Qualificado com e-mail ou telefone. Evita duplicatas e não envia mensagens.</p>
+    </div>
+    <form method="post" action="{{ url_for('start_auto_draft') }}">
+      <button class="button" type="submit" {% if draft_job and draft_job.status in ['queued','running'] %}disabled{% endif %}>Preparar abordagens automaticamente</button>
+    </form>
+  </div>
+  {% if draft_job %}
+  <div class="notice" id="auto-draft-status" data-status-url="{{ url_for('auto_draft_status', job_id=draft_job.id) }}">
+    <strong>{% if draft_job.status in ['queued','running'] %}Preparação em andamento{% elif draft_job.status == 'done' %}Preparação concluída{% else %}Preparação interrompida{% endif %}</strong>
+    <p id="auto-draft-message">{{ draft_job.message }}</p>
+    <p id="auto-draft-counts" class="muted">{{ draft_job.processed }}/{{ draft_job.total }} avaliados · {{ draft_job.prepared }} preparados · {{ draft_job.skipped }} duplicados · {{ draft_job.errors }} falhas</p>
+  </div>
+  {% if draft_job.status in ['queued','running'] %}
+  <script>
+  (() => {
+    const box = document.getElementById("auto-draft-status");
+    if (!box) return;
+    let attempts = 0;
+    async function poll() {
+      attempts += 1;
+      try {
+        const response = await fetch(box.dataset.statusUrl, {cache: "no-store", credentials: "same-origin"});
+        if (!response.ok) throw new Error("status unavailable");
+        const data = await response.json();
+        const message = document.getElementById("auto-draft-message");
+        const counts = document.getElementById("auto-draft-counts");
+        if (message) message.textContent = data.message || "";
+        if (counts) counts.textContent = String(data.processed) + "/" + String(data.total) + " avaliados · " + String(data.prepared) + " preparados · " + String(data.skipped) + " duplicados · " + String(data.errors) + " falhas";
+        if (data.status === "done" || data.status === "failed") {
+          window.location.reload();
+          return;
+        }
+      } catch (_) {}
+      window.setTimeout(poll, attempts < 5 ? 1500 : 3000);
+    }
+    window.setTimeout(poll, 1000);
+  })();
+  </script>
+  {% endif %}
+  {% endif %}
+  <p class="form-actions"><a class="button ghost" href="{{ url_for('outreach_queue') }}">Abrir fila de abordagens →</a></p>
+</section>
+
 <form class="filters" method="get">
   <input name="q" value="{{ q }}" placeholder="Buscar empresa, segmento ou cidade">
   <select name="status">
