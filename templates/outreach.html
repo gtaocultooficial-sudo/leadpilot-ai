@@ -56,6 +56,18 @@
     </div>
     {% if d.status=='sent' %}
     <div class="panel" style="margin-top:14px">
+      <h4 style="margin:0 0 10px">Registrar resposta recebida</h4>
+      <form method="post" action="{{ url_for('record_outreach_response', draft_id=d.id) }}" class="form-grid" onsubmit="return confirm('Confirma que esta resposta foi recebida fora do LeadPilot?')">
+        <label class="wide">Resumo da resposta
+          <textarea name="response_note" rows="3" maxlength="2000" required placeholder="Ex.: pediu uma proposta para a próxima semana; prefere contato por e-mail."></textarea>
+        </label>
+        <div class="form-actions wide">
+          <button class="button secondary" type="submit">Salvar resposta no histórico</button>
+        </div>
+      </form>
+      <p class="muted" style="margin-top:8px">O registro atualiza o lead para “Respondeu”, salva a observação e limpa o acompanhamento deste contato. Nenhuma mensagem é enviada automaticamente.</p>
+    </div>
+    <div class="panel" style="margin-top:14px">
       <h4 style="margin:0 0 10px">Agendar próximo acompanhamento</h4>
       <form method="post" action="{{ url_for('schedule_outreach_follow_up', draft_id=d.id) }}" class="form-grid">
         <label>Data do retorno
