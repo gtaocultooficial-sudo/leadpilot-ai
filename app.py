@@ -13,7 +13,7 @@ from functools import wraps
 import psycopg
 from psycopg.rows import dict_row
 from flask import Flask, Response, flash, redirect, render_template, request, session, url_for
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote_plus, urlencode, urlparse
 from urllib.request import Request as URLRequest, urlopen
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
@@ -330,7 +330,7 @@ def _photon_contact_value(props, extra, *keys):
 
 
 def _fetch_saved_osm_item(notes):
-    """Fetch the exact OSM record only when an imported lead has a saved item URL."""
+    """Read the exact saved OSM object and derive a coordinate for location confirmation."""
     match = re.search(
         r"OpenStreetMap item:\s*https://www\.openstreetmap\.org/(node|way|relation)/(\d+)",
         notes or "",
@@ -339,25 +339,94 @@ def _fetch_saved_osm_item(notes):
         return None
     osm_kind, osm_id = match.groups()
     source_url = f"https://www.openstreetmap.org/{osm_kind}/{osm_id}"
-    api_url = f"https://api.openstreetmap.org/api/0.6/{osm_kind}/{osm_id}.json"
+    endpoint = f"https://api.openstreetmap.org/api/0.6/{osm_kind}/{osm_id}"
+    # A node has coordinates itself. Ways/relations need their referenced nodes to estimate
+    # the object's center; these are read-only API requests for the already saved object.
+    api_url = endpoint + (".json" if osm_kind == "node" else "/full.json")
     req = URLRequest(
         api_url,
         headers={
-            "User-Agent": "LeadPilotAI/0.5 (+https://leadpilot-ai-5642.onrender.com)",
+            "User-Agent": "LeadPilotAI/0.6 (+https://leadpilot-ai-5642.onrender.com)",
             "Accept": "application/json",
         },
         method="GET",
     )
     with urlopen(req, timeout=8) as response:
         payload = json.loads(response.read().decode("utf-8"))
+    elements = payload.get("elements", [])
     element = next(
-        (item for item in payload.get("elements", [])
+        (item for item in elements
          if str(item.get("id")) == osm_id and item.get("type") == osm_kind),
         None,
     )
     if not element:
         raise RuntimeError("A fonte não retornou o item original salvo neste lead.")
-    return {"url": source_url, "tags": element.get("tags") or {}, "type": osm_kind, "id": osm_id}
+    lat = element.get("lat")
+    lon = element.get("lon")
+    if lat is None or lon is None:
+        points = [
+            (float(item["lat"]), float(item["lon"]))
+            for item in elements
+            if item.get("type") == "node" and item.get("lat") is not None and item.get("lon") is not None
+        ]
+        if points:
+            # Bounding-box center is more stable than a mean for irregular building rings.
+            lat = (min(point[0] for point in points) + max(point[0] for point in points)) / 2
+            lon = (min(point[1] for point in points) + max(point[1] for point in points)) / 2
+    return {
+        "url": source_url,
+        "tags": element.get("tags") or {},
+        "type": osm_kind,
+        "id": osm_id,
+        "lat": float(lat) if lat is not None else None,
+        "lon": float(lon) if lon is not None else None,
+    }
+
+
+def _photon_reverse_location(lat, lon):
+    """Resolve the municipality for one exact coordinate using Photon reverse geocoding."""
+    if lat is None or lon is None:
+        return {}
+    url = "https://photon.komoot.io/reverse?" + urlencode({
+        "lat": f"{float(lat):.7f}",
+        "lon": f"{float(lon):.7f}",
+        "lang": "default",
+        "limit": 1,
+    })
+    req = URLRequest(
+        url,
+        headers={
+            "User-Agent": "LeadPilotAI/0.6 (+https://leadpilot-ai-5642.onrender.com)",
+            "Accept": "application/geo+json, application/json",
+        },
+        method="GET",
+    )
+    with urlopen(req, timeout=7) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    features = payload.get("features") or []
+    if not features:
+        return {}
+    props = features[0].get("properties") or {}
+    city_name = (
+        props.get("city")
+        or props.get("municipality")
+        or ""
+    ).strip()
+    address_parts = [
+        props.get("housenumber") or "",
+        props.get("street") or "",
+        props.get("district") or "",
+        city_name,
+        props.get("state") or "",
+    ]
+    return {
+        "city": city_name,
+        "state": (props.get("state") or "").strip(),
+        "country": (props.get("country") or "").strip(),
+        "address": ", ".join(str(part).strip() for part in address_parts if str(part).strip()),
+        "osm_name": (props.get("name") or "").strip(),
+        "source_url": url,
+    }
 
 
 @app.route("/leads/<int:lead_id>/research", methods=["GET", "POST"])
