@@ -759,6 +759,10 @@ def lead_research(lead_id):
                 "Tente mais tarde ou use as pesquisas externas abaixo."
             )
 
+    has_saved_osm_reference = bool(re.search(
+        r"OpenStreetMap item:\s*https://www\.openstreetmap\.org/(?:node|way|relation)/\d+",
+        lead.get("notes") or "",
+    ))
     return render_template(
         "research.html",
         lead=lead,
@@ -768,6 +772,7 @@ def lead_research(lead_id):
         enrichment_match=enrichment_match,
         enrichment_message=enrichment_message,
         enrichment_source_checked=enrichment_source_checked,
+        has_saved_osm_reference=has_saved_osm_reference,
     )
 
 
