@@ -252,7 +252,7 @@ def _request_overpass(query, clean_city):
         address_bits = [
             tags.get("addr:street", ""),
             tags.get("addr:housenumber", ""),
-            tags.get("addr:suburb", ""),
+            tags.get("addr:suburb", "") or tags.get("addr:place", ""),
         ]
         address = ", ".join(part for part in address_bits if part)
         website = (tags.get("contact:website") or tags.get("website") or tags.get("url") or "").strip()
@@ -270,7 +270,9 @@ def _request_overpass(query, clean_city):
             "phone": phone,
             "email": email,
             "address": address,
-            "city": tags.get("addr:city") or clean_city_for_display(tags, address),
+            "city": (tags.get("addr:city") or "").strip(),
+            "source_city": (tags.get("addr:city") or "").strip(),
+            "locality": (tags.get("addr:suburb") or tags.get("addr:place") or "").strip(),
             "lat": center.get("lat", item.get("lat")),
             "lon": center.get("lon", item.get("lon")),
             "osm_url": f"https://www.openstreetmap.org/{osm_type}/{osm_id}",
