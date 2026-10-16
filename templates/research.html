@@ -106,10 +106,24 @@
   <div class="panel" style="margin-top:12px">
     <h3>{{ item.title }}</h3>
     <p class="muted">{{ item.description }}</p>
-    <p style="margin:12px 0 0"><a class="button secondary" href="{{ item.url }}" target="_blank" rel="noopener noreferrer">Abrir pesquisa ↗</a></p>
+    <form method="post" action="{{ url_for('open_research_source', lead_id=lead.id, source=item.key) }}" target="_blank" style="margin-top:12px">
+      <button class="button secondary" type="submit">Abrir pesquisa ↗</button>
+    </form>
   </div>
   {% endfor %}
 </section>
+
+{% if research_history %}
+<section class="panel">
+  <div class="section-head"><h2>Histórico de pesquisa comercial</h2><span class="muted">Últimas consultas abertas</span></div>
+  <p class="muted">Este histórico registra quais pesquisas você abriu. Ele não significa que o resultado foi encontrado ou validado.</p>
+  <ul>
+    {% for event in research_history %}
+      <li style="margin-bottom:8px">{{ event }}</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
 
 <section class="panel">
   <h2>Depois de conferir os resultados</h2>
