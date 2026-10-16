@@ -27,7 +27,7 @@
 
 <section class="panel">
   <div class="section-head"><h2>Consultar fonte pública automaticamente</h2><span class="muted">Busca limitada e sem disparo de mensagens</span></div>
-  <p class="muted">O LeadPilot AI consulta o Photon, baseado em dados do OpenStreetMap, e procura uma correspondência pelo nome e pela cidade. Só sugere site, e-mail ou telefone que já estejam publicados na fonte; não completa nem adivinha contatos.</p>
+  <p class="muted">O LeadPilot AI consulta dados públicos do OpenStreetMap via Photon e, se necessário, tenta uma segunda pesquisa via Overpass dentro da área administrativa da cidade. Só sugere site, e-mail ou telefone publicados na fonte, e exige confirmação do município antes de exibir contatos.</p>
   <form method="post" action="{{ url_for('lead_research', lead_id=lead.id) }}">
     <button class="button" type="submit">Buscar dados públicos da empresa</button>
   </form>
