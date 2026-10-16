@@ -922,9 +922,7 @@ def leads():
         else:
             lead["channel_label"] = "Sem canal cadastrado"
             lead["channel_hint"] = "Pesquise um meio comercial público antes de abordar"
-        if has_direct and lead.get("status") not in ("Cliente", "Sem interesse"):
-            lead["next_step"] = "Revisar e preparar abordagem"
-        elif lead["score"] < 40:
+        if lead["score"] < 40:
             lead["quality_label"] = "Dados incompletos"
             lead["next_step"] = "Completar os dados básicos"
         elif lead["score"] < 70:
@@ -933,6 +931,8 @@ def leads():
         else:
             lead["quality_label"] = "Bem documentado"
             lead["next_step"] = "Revisar a abordagem"
+        if has_direct and lead.get("status") not in ("Cliente", "Sem interesse"):
+            lead["next_step"] = "Revisar e preparar abordagem"
         if needs_manual_research and not has_direct and not has_website:
             lead["next_step"] = "Pesquisar diretório comercial ou perfil oficial"
         decorated.append(lead)
