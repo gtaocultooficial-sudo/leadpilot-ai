@@ -1,2 +1,61 @@
-{% extends "base.html" %}{% block title %}Rascunho de contato · LeadPilot AI{% endblock %}
-{% block content %}<section class="page-head"><div><p class="eyebrow">ABORDAGEM COMERCIAL</p><h1>Rascunho para {{ lead.company }}</h1><p class="muted">Revise e personalize antes de enviar. Esta tela não envia mensagens.</p></div><a class="button ghost" href="{{ url_for('edit_lead', lead_id=lead.id) }}">Editar lead</a></section><section class="panel"><label>Mensagem sugerida<textarea id="draft" rows="12" readonly>{{ message }}</textarea></label><div class="form-actions"><button class="button" onclick="navigator.clipboard.writeText(document.getElementById('draft').value);this.textContent='Copiado!'">Copiar mensagem</button><a class="button secondary" href="{{ url_for('leads') }}">Voltar aos leads</a></div><p class="notice">Envie somente quando houver base legítima para o contato. Respeite pedidos de não contato e regras do canal.</p></section>{% endblock %}
+{% extends "base.html" %}
+{% block title %}Abordagem comercial · LeadPilot AI{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <p class="eyebrow">ABORDAGEM COMERCIAL</p>
+    <h1>Preparar contato: {{ lead.company }}</h1>
+    <p class="muted">Escolha um formato, revise as informações e personalize o texto. Nenhuma mensagem é enviada por esta tela.</p>
+  </div>
+  <a class="button ghost" href="{{ url_for('edit_lead', lead_id=lead.id) }}">Editar lead</a>
+</section>
+
+<section class="panel">
+  <div class="section-head"><h2>Qualificação do lead</h2><span class="score">{{ qualification.score }}/100</span></div>
+  <p><strong>{{ qualification.level }}</strong> — {{ qualification.summary }}</p>
+  <p class="muted">{{ qualification.score_note }}</p>
+  {% if qualification.missing %}
+  <h3>Próximas verificações recomendadas</h3>
+  <ul>{% for item in qualification.missing %}<li>{{ item }}</li>{% endfor %}</ul>
+  {% else %}
+  <p class="notice">Os campos básicos estão preenchidos. Confirme se os dados continuam corretos e se o contato é pertinente.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <div class="section-head"><h2>Rascunhos sugeridos</h2><span class="muted">Copie e revise antes de usar</span></div>
+  {% for variant in variants %}
+  <div class="panel" style="margin-top:14px">
+    <h3>{{ variant.title }}</h3>
+    {% if variant.subject %}
+    <label>Assunto sugerido<input readonly value="{{ variant.subject }}" id="subject-{{ variant.key }}"></label>
+    {% endif %}
+    <label>Texto<textarea id="draft-{{ variant.key }}" rows="7" readonly>{{ variant.body }}</textarea></label>
+    <div class="form-actions">
+      <button class="button" type="button" onclick="copyDraft('draft-{{ variant.key }}', this)">Copiar texto</button>
+      {% if variant.subject %}<button class="button secondary" type="button" onclick="copySubjectAndDraft('subject-{{ variant.key }}','draft-{{ variant.key }}',this)">Copiar assunto + texto</button>{% endif %}
+    </div>
+  </div>
+  {% endfor %}
+  <p class="notice">Use os dados disponíveis sem presumir problemas que não foram confirmados. Faça contato somente por canal comercial adequado, respeite a LGPD e pedidos para não receber novas mensagens.</p>
+  <div class="form-actions"><a class="button ghost" href="{{ url_for('leads') }}">Voltar aos leads</a><a class="button secondary" href="{{ url_for('edit_lead', lead_id=lead.id) }}">Completar qualificação</a></div>
+</section>
+<script>
+async function copyText(value, button) {
+  try {
+    await navigator.clipboard.writeText(value);
+    button.textContent = "Copiado!";
+  } catch (err) {
+    button.textContent = "Selecione e copie manualmente";
+  }
+}
+function copyDraft(id, button) {
+  copyText(document.getElementById(id).value, button);
+}
+function copySubjectAndDraft(subjectId, draftId, button) {
+  const subject = document.getElementById(subjectId).value;
+  const draft = document.getElementById(draftId).value;
+  copyText("Assunto: " + subject + "\n\n" + draft, button);
+}
+</script>
+{% endblock %}
