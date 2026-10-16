@@ -642,13 +642,15 @@ def _auto_import_results(segment, city, results):
                 invalid += 1
                 continue
 
-            # Preserve existing manual entries; repeated runs skip the same business/city.
+            # Deduplicate by business/city and by stable OpenStreetMap item URL.
+            # This also catches the same mapped business if its display name changes.
             exists = conn.execute(
                 """SELECT id FROM leads
-                   WHERE lower(company)=lower(%s)
-                     AND lower(COALESCE(city,''))=lower(%s)
+                   WHERE (lower(company)=lower(%s)
+                     AND lower(COALESCE(city,''))=lower(%s))
+                      OR COALESCE(notes,'') ILIKE %s
                    LIMIT 1""",
-                (name, target_city),
+                (name, target_city, "%OpenStreetMap item: " + osm_url + "%"),
             ).fetchone()
             if exists:
                 skipped += 1
