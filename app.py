@@ -10,6 +10,7 @@ import os
 import threading
 import uuid
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from functools import wraps
 
 import psycopg
@@ -458,6 +459,8 @@ def _ensure_outreach_tables():
         )""")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_outreach_status ON outreach_drafts(status, updated_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_outreach_lead ON outreach_drafts(lead_id)")
+        conn.execute("ALTER TABLE outreach_drafts ADD COLUMN IF NOT EXISTS follow_up_date TEXT NOT NULL DEFAULT ''")
+        conn.execute("ALTER TABLE outreach_drafts ADD COLUMN IF NOT EXISTS follow_up_note TEXT NOT NULL DEFAULT ''")
         conn.execute("""CREATE TABLE IF NOT EXISTS auto_draft_jobs (
             id TEXT PRIMARY KEY,
             status TEXT NOT NULL,
@@ -685,19 +688,63 @@ def auto_draft_status(job_id):
 def outreach_queue():
     _ensure_outreach_tables()
     state = request.args.get("status", "draft").strip()
-    allowed = {"draft", "sent", "archived"}
+    allowed = {"draft", "sent", "archived", "followup"}
     if state not in allowed:
         state = "draft"
     with db() as conn:
-        rows = conn.execute(
-            """SELECT d.*, l.company, l.email, l.phone, l.city, l.segment, l.status AS lead_status
-               FROM outreach_drafts d
-               JOIN leads l ON l.id=d.lead_id
-               WHERE d.status=%s
-               ORDER BY d.updated_at DESC, d.id DESC LIMIT 100""",
-            (state,),
-        ).fetchall()
-    return render_template("outreach.html", rows=rows, selected_state=state)
+        if state == "followup":
+            rows = conn.execute(
+                """SELECT d.*, l.company, l.email, l.phone, l.city, l.segment, l.status AS lead_status
+                   FROM outreach_drafts d
+                   JOIN leads l ON l.id=d.lead_id
+                   WHERE d.status='sent' AND COALESCE(d.follow_up_date,'')<>''
+                   ORDER BY d.follow_up_date ASC, d.updated_at DESC, d.id DESC LIMIT 100"""
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT d.*, l.company, l.email, l.phone, l.city, l.segment, l.status AS lead_status
+                   FROM outreach_drafts d
+                   JOIN leads l ON l.id=d.lead_id
+                   WHERE d.status=%s
+                   ORDER BY d.updated_at DESC, d.id DESC LIMIT 100""",
+                (state,),
+            ).fetchall()
+    today_local = datetime.now(timezone.utc).astimezone(ZoneInfo("America/Sao_Paulo")).date().isoformat()
+    return render_template("outreach.html", rows=rows, selected_state=state, today_local=today_local)
+
+
+@app.route("/outreach/<int:draft_id>/follow-up", methods=["POST"])
+@login_required
+def schedule_outreach_follow_up(draft_id):
+    _ensure_outreach_tables()
+    follow_up_date = request.form.get("follow_up_date", "").strip()
+    follow_up_note = request.form.get("follow_up_note", "").strip()[:1000]
+    if follow_up_date:
+        try:
+            datetime.strptime(follow_up_date, "%Y-%m-%d")
+        except ValueError:
+            flash("Informe uma data válida para o acompanhamento.", "error")
+            return redirect(url_for("outreach_queue", status="sent"))
+
+    now = now_iso()
+    with db() as conn:
+        draft = conn.execute("SELECT id,status FROM outreach_drafts WHERE id=%s", (draft_id,)).fetchone()
+        if not draft:
+            flash("Rascunho não encontrado.", "error")
+            return redirect(url_for("outreach_queue"))
+        if draft["status"] != "sent":
+            flash("Agende o acompanhamento depois de confirmar o envio manual.", "error")
+            return redirect(url_for("outreach_queue", status="draft"))
+        conn.execute(
+            """UPDATE outreach_drafts
+               SET follow_up_date=%s, follow_up_note=%s, updated_at=%s WHERE id=%s""",
+            (follow_up_date, follow_up_note, now, draft_id),
+        )
+    if follow_up_date:
+        flash(f"Acompanhamento agendado para {follow_up_date}.", "success")
+        return redirect(url_for("outreach_queue", status="followup"))
+    flash("Acompanhamento removido.", "success")
+    return redirect(url_for("outreach_queue", status="sent"))
 
 
 @app.route("/outreach/<int:draft_id>/mark-sent", methods=["POST"])
