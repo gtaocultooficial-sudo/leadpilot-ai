@@ -259,7 +259,7 @@ def _run_auto_research_job(app_obj, job_id):
                          AND COALESCE(city,'')<>''
                          AND status NOT IN ('Cliente','Sem interesse')
                          AND COALESCE(notes,'') NOT ILIKE %s
-                       ORDER BY score DESC, updated_at ASC
+                       ORDER BY updated_at DESC, score DESC
                        LIMIT 12""",
                     ("%[Pesquisa automática de contato]%",),
                 ).fetchall()
