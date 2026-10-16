@@ -393,7 +393,10 @@ def save_research_data(lead_id):
             return redirect(url_for("leads"))
 
         updated = dict(existing)
-        updated.update(data)
+        # Empty form fields preserve existing data to prevent accidental deletion.
+        for key, value in data.items():
+            if value:
+                updated[key] = value
         updated["source"] = existing.get("source") or "Pesquisa manual"
         score = score_lead(updated)
         audit = f"[Pesquisa comercial {now}] Fonte conferida: {source_checked}"
@@ -405,7 +408,7 @@ def save_research_data(lead_id):
             """UPDATE leads
                SET website=%s, email=%s, phone=%s, notes=%s, score=%s, updated_at=%s
                WHERE id=%s""",
-            (website, email, data["phone"], new_notes, score, now, lead_id),
+            (updated.get("website", ""), updated.get("email", ""), updated.get("phone", ""), new_notes, score, now, lead_id),
         )
 
     flash("Dados comerciais salvos no lead e a fonte foi registrada nas notas.", "success")
