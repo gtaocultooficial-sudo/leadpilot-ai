@@ -1085,6 +1085,22 @@ def record_no_public_contact(lead_id):
             flash("Lead não encontrado.", "error")
             return redirect(url_for("leads"))
         notes = (existing.get("notes") or "").strip()
+        # Make this operation idempotent: repeated clicks on the same source should
+        # not append duplicate audit entries to the lead's notes.
+        duplicate = any(
+            line.startswith(marker_text)
+            and f"| Fonte: {checked_source}" in line
+            and (
+                (f"| Registro consultado: {source_url}" in line)
+                if source_url
+                else "| Registro consultado:" not in line
+            )
+            for line in notes.splitlines()
+        )
+        if duplicate:
+            flash("Esta tentativa dessa fonte já está registrada. Não foi criada uma nota duplicada.", "success")
+            return redirect(url_for("lead_research", lead_id=lead_id))
+
         audit = (
             f"{marker_text} {now} | Fonte: {checked_source}"
             + (f" | Registro consultado: {source_url}" if source_url else "")
@@ -1269,7 +1285,11 @@ def import_csv():
             return redirect(url_for("import_csv"))
         try:
             content = upload.stream.read().decode("utf-8-sig")
-            reader = csv.DictReader(io.StringIO(content))
+            # Support both comma-separated CSVs from other tools and semicolon-separated
+            # files produced for Excel installations configured for Brazil.
+            first_line = content.splitlines()[0] if content.splitlines() else ""
+            delimiter = ";" if first_line.count(";") > first_line.count(",") else ","
+            reader = csv.DictReader(io.StringIO(content), delimiter=delimiter)
             names = {name.strip().lower() for name in (reader.fieldnames or [])}
             if "company" not in names:
                 flash("O CSV precisa ter pelo menos a coluna company.", "error")
@@ -1301,18 +1321,26 @@ def import_csv():
 def export_csv():
     with db() as conn:
         rows = conn.execute("SELECT company,contact_name,email,phone,website,segment,city,source,need,notes,status,score,consent_basis,created_at,updated_at FROM leads ORDER BY id").fetchall()
-    output = io.StringIO()
-    writer = csv.writer(output)
+    output = io.StringIO(newline="")
+    # Brazilian Excel commonly expects semicolons as the CSV delimiter. Also flatten
+    # note line breaks so one lead stays on one visible spreadsheet row.
+    writer = csv.writer(output, delimiter=";", lineterminator="\r\n")
     writer.writerow(["company", "contact_name", "email", "phone", "website", "segment", "city", "source", "need", "notes", "status", "score", "consent_basis", "created_at", "updated_at"])
     for row in rows:
-        writer.writerow([row[key] for key in row.keys()])
+        values = []
+        for key in row.keys():
+            value = row[key]
+            if isinstance(value, str):
+                value = value.replace("\r\n", "\n").replace("\r", "\n").replace("\n", " | ")
+            values.append(value)
+        writer.writerow(values)
     return Response("\ufeff" + output.getvalue(), mimetype="text/csv; charset=utf-8", headers={"Content-Disposition": "attachment; filename=leads.csv"})
 
 
 @app.route("/sample.csv")
 @login_required
 def sample_csv():
-    data = "company,contact_name,email,phone,website,segment,city,source,need,notes,consent_basis\nExemplo Barbearia,Marcos,contato@example.com,,https://example.com,Barbearia,Guarulhos,Site público,Organizar agendamentos,Exemplo fictício; substituir por dados reais,Contato comercial pertinente\n"
+    data = "company;contact_name;email;phone;website;segment;city;source;need;notes;consent_basis\r\nExemplo Barbearia;Marcos;contato@example.com;;https://example.com;Barbearia;Guarulhos;Site público;Organizar agendamentos;Exemplo fictício, substituir por dados reais;Contato comercial pertinente\r\n"
     return Response(data, mimetype="text/csv; charset=utf-8", headers={"Content-Disposition": "attachment; filename=modelo_leads.csv"})
 
 
