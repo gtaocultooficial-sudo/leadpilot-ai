@@ -36,7 +36,7 @@
     <label class="wide">Observações da verificação (opcional)<textarea name="research_note" rows="2" maxlength="1000" placeholder="Ex.: telefone exibido na página Contato, consultado hoje"></textarea></label>
     <div class="wide form-actions"><button class="button" type="submit">Salvar dados no lead</button><a class="button ghost" href="{{ url_for('edit_lead', lead_id=lead.id) }}">Abrir cadastro completo</a></div>
   </form>
-  <p class="notice">Não invente nem deduza e-mails/telefones. Salvar atualiza os campos informados e acrescenta fonte e data às notas do cadastro. Se um campo ficar vazio, ele será limpo no cadastro; mantenha o valor atual quando não quiser alterá-lo.</p>
+  <p class="notice">Não invente nem deduza e-mails/telefones. Salvar atualiza os campos preenchidos e acrescenta fonte e data às notas. Campos deixados vazios preservam os dados já cadastrados.</p>
 </section>
 
 <section class="panel">
