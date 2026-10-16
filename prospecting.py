@@ -368,6 +368,7 @@ def _photon_tags(segment):
 
 def _request_photon(segment, city):
     clean_city, bbox = _photon_city_bbox(city)
+    includes = _photon_tags(segment)
     # Use official Photon category filters for known business sectors.
     # The public instance rejected lang=pt; supported language is now "default".
     params = {
