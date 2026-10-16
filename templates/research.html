@@ -26,6 +26,20 @@
 </section>
 
 <section class="panel">
+  <div class="section-head"><h2>Salvar dados comerciais encontrados</h2><span class="muted">Preencha após conferir uma fonte</span></div>
+  <p class="muted">Os resultados externos não são importados automaticamente. Cole aqui somente os dados comerciais que você confirmou para esta empresa; o sistema valida o formato e registra a fonte nas notas.</p>
+  <form method="post" action="{{ url_for('save_research_data', lead_id=lead.id) }}" class="form-grid">
+    <label>Site oficial<input name="website" type="url" placeholder="https://empresa.com.br" value="{{ lead.website or '' }}"></label>
+    <label>E-mail comercial<input name="email" type="email" placeholder="contato@empresa.com.br" value="{{ lead.email or '' }}"></label>
+    <label>Telefone comercial<input name="phone" maxlength="80" placeholder="(11) 0000-0000" value="{{ lead.phone or '' }}"></label>
+    <label>Fonte conferida *<input name="checked_source" required maxlength="240" placeholder="Ex.: site oficial da empresa, página de contato"></label>
+    <label class="wide">Observações da verificação (opcional)<textarea name="research_note" rows="2" maxlength="1000" placeholder="Ex.: telefone exibido na página Contato, consultado hoje"></textarea></label>
+    <div class="wide form-actions"><button class="button" type="submit">Salvar dados no lead</button><a class="button ghost" href="{{ url_for('edit_lead', lead_id=lead.id) }}">Abrir cadastro completo</a></div>
+  </form>
+  <p class="notice">Não invente nem deduza e-mails/telefones. Salvar atualiza os campos informados e acrescenta fonte e data às notas do cadastro. Se um campo ficar vazio, ele será limpo no cadastro; mantenha o valor atual quando não quiser alterá-lo.</p>
+</section>
+
+<section class="panel">
   <div class="section-head"><h2>Pesquisas de um clique</h2><span class="muted">Abrem em nova aba</span></div>
   {% for item in research_links %}
   <div class="panel" style="margin-top:12px">
