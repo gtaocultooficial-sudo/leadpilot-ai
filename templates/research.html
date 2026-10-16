@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Pesquisar empresa · LeadPilot AI{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <p class="eyebrow">ENRIQUECIMENTO DE DADOS</p>
+    <h1>Pesquisar {{ lead.company }}</h1>
+    <p class="muted">Pesquisas prontas para confirmar o site, a localização e os canais comerciais públicos.</p>
+  </div>
+  <a class="button ghost" href="{{ url_for('edit_lead', lead_id=lead.id) }}">Editar cadastro</a>
+</section>
+
+<section class="panel">
+  <h2>Dados cadastrados</h2>
+  <div class="stats">
+    <div class="stat"><span>Segmento</span><strong style="font-size:20px">{{ lead.segment or "Não informado" }}</strong></div>
+    <div class="stat"><span>Cidade/região</span><strong style="font-size:20px">{{ lead.city or "Não informada" }}</strong></div>
+    <div class="stat"><span>Canal registrado</span><strong style="font-size:20px">{{ "Sim" if (lead.website or lead.email or lead.phone) else "Ainda não" }}</strong></div>
+  </div>
+  {% if lead.website %}
+  <p>Site cadastrado: <a href="{{ lead.website }}" target="_blank" rel="noopener noreferrer">{{ lead.website }}</a></p>
+  {% endif %}
+  {% if lead.phone %}<p>Telefone cadastrado: <strong>{{ lead.phone }}</strong></p>{% endif %}
+  {% if lead.email %}<p>E-mail cadastrado: <strong>{{ lead.email }}</strong></p>{% endif %}
+  <p class="notice">Confirme se cada resultado corresponde à empresa certa e se o canal é comercial e público. Não copie dados de pessoas sem necessidade nem presuma que a empresa deseja receber contato.</p>
+</section>
+
+<section class="panel">
+  <div class="section-head"><h2>Pesquisas de um clique</h2><span class="muted">Abrem em nova aba</span></div>
+  {% for item in research_links %}
+  <div class="panel" style="margin-top:12px">
+    <h3>{{ item.title }}</h3>
+    <p class="muted">{{ item.description }}</p>
+    <p style="margin:12px 0 0"><a class="button secondary" href="{{ item.url }}" target="_blank" rel="noopener noreferrer">Abrir pesquisa ↗</a></p>
+  </div>
+  {% endfor %}
+</section>
+
+<section class="panel">
+  <h2>Depois de conferir os resultados</h2>
+  <p class="muted">Volte ao cadastro e registre somente os dados comerciais úteis, a fonte consultada e a data de verificação.</p>
+  <div class="form-actions" style="margin-top:16px">
+    <a class="button" href="{{ url_for('edit_lead', lead_id=lead.id) }}">Atualizar dados do lead</a>
+    <a class="button ghost" href="{{ url_for('lead_message', lead_id=lead.id) }}">Ver rascunhos de abordagem</a>
+    <a class="button ghost" href="{{ url_for('leads') }}">Voltar aos leads</a>
+  </div>
+</section>
+{% endblock %}
