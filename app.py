@@ -429,6 +429,98 @@ def _photon_reverse_location(lat, lon):
     }
 
 
+def _find_overpass_business_match(company, city, ignored_urls=None):
+    """Find the exact business name inside the requested OSM administrative area.
+
+    Contact fields are returned only after the candidate's municipality is confirmed
+    by an explicit addr:city tag or Photon reverse geocoding of its coordinates.
+    """
+    from prospecting import _build_query, _request_overpass
+
+    ignored_urls = set(ignored_urls or [])
+    requested_city = (city or "").split(",", 1)[0].strip()
+    expected_city = _normalize_match_text(requested_city)
+    _clean_city, query = _build_query(company, city)
+    rows = _request_overpass(query, requested_city)
+    company_norm = _normalize_match_text(company)
+    matches = []
+
+    for row in rows:
+        source_url = (row.get("osm_url") or "").strip()
+        if source_url and source_url in ignored_urls:
+            continue
+        found_name = (row.get("name") or "").strip()
+        found_norm = _normalize_match_text(found_name)
+        if not found_name or not found_norm or not company_norm:
+            continue
+
+        name_score = SequenceMatcher(None, company_norm, found_norm).ratio()
+        if company_norm == found_norm:
+            name_score = 1.0
+        elif min(len(company_norm), len(found_norm)) >= 4 and (
+            company_norm in found_norm or found_norm in company_norm
+        ):
+            name_score = max(name_score, 0.84)
+        if name_score < 0.80:
+            continue
+
+        tagged_city = (row.get("source_city") or "").strip()
+        tagged_city_norm = _normalize_match_text(tagged_city)
+        tagged_city_match = bool(tagged_city_norm and expected_city == tagged_city_norm)
+        if tagged_city and not tagged_city_match:
+            # Explicit addr:city conflicts with the searched municipality.
+            continue
+
+        reverse = {}
+        if row.get("lat") is not None and row.get("lon") is not None:
+            try:
+                reverse = _photon_reverse_location(row["lat"], row["lon"])
+            except Exception as exc:
+                current_app.logger.warning(
+                    "Overpass candidate reverse geocoding failed (%s): %s",
+                    source_url, str(exc)[:180]
+                )
+        reverse_city = (reverse.get("city") or "").strip()
+        reverse_city_norm = _normalize_match_text(reverse_city)
+        reverse_city_match = bool(reverse_city_norm and expected_city == reverse_city_norm)
+
+        if reverse_city and not reverse_city_match:
+            continue
+        if not (tagged_city_match or reverse_city_match):
+            # No confirmed municipality: do not suggest contacts from this candidate.
+            continue
+
+        verified_city = reverse_city if reverse_city_match else tagged_city
+        matches.append({
+            "name": found_name,
+            "city": verified_city,
+            "score": round(name_score * 100),
+            "city_match": True,
+            "source_url": source_url or "https://www.openstreetmap.org/",
+            "website": (row.get("website") or "").strip(),
+            "email": (row.get("email") or "").strip(),
+            "phone": (row.get("phone") or "").strip()[:80],
+            "address": (row.get("address") or reverse.get("address") or "").strip(),
+            "location_method": (
+                "Etiqueta addr:city do registro e limites administrativos do OpenStreetMap"
+                if tagged_city_match
+                else "Coordenadas do estabelecimento conferidas pelo Photon"
+            ),
+        })
+
+    if not matches:
+        return None
+    matches.sort(key=lambda item: item["score"], reverse=True)
+    if len(matches) > 1 and matches[0]["score"] == matches[1]["score"] and matches[0]["source_url"] != matches[1]["source_url"]:
+        return {
+            "ambiguous": True,
+            "name": matches[0]["name"],
+            "city": requested_city,
+            "score": matches[0]["score"],
+        }
+    return matches[0]
+
+
 @app.route("/leads/<int:lead_id>/research", methods=["GET", "POST"])
 @login_required
 def lead_research(lead_id):
