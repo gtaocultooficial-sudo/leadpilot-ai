@@ -13,6 +13,12 @@
     <option value="followup" {% if selected_state=='followup' %}selected{% endif %}>Acompanhamentos agendados</option>
     <option value="archived" {% if selected_state=='archived' %}selected{% endif %}>Arquivados</option>
   </select>
+  <select name="bucket" aria-label="Filtrar por data do acompanhamento">
+    <option value="" {% if not selected_bucket %}selected{% endif %}>Todas as datas</option>
+    <option value="overdue" {% if selected_bucket=='overdue' %}selected{% endif %}>Atrasados</option>
+    <option value="today" {% if selected_bucket=='today' %}selected{% endif %}>Para hoje</option>
+    <option value="upcoming" {% if selected_bucket=='upcoming' %}selected{% endif %}>Próximos</option>
+  </select>
   <button class="button secondary" type="submit">Filtrar fila</button>
   </form>
   <form method="post" action="{{ url_for('start_auto_draft') }}"><button class="button" type="submit">Preparar novos rascunhos</button></form>
