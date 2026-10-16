@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Afiliados · LeadPilot AI{% endblock %}
+{% block content %}
+<section class="hero">
+  <div><p class="eyebrow">VENDAS SEM ESTOQUE</p><h1>Catálogo de afiliados</h1>
+  <p class="muted">Organize produtos da Hotmart, Mercado Livre e Amazon. O catálogo não cria contas nem gera links oficiais automaticamente.</p></div>
+</section>
+<section class="panel">
+  <div class="section-head"><h2>Programas de afiliados</h2></div>
+  <div class="stats">
+  {% for p in platforms %}
+    <div class="stat"><span>{{ p.name }}</span><strong style="font-size:18px">{{ p.description }}</strong><p><a href="{{ p.url }}" target="_blank" rel="noopener noreferrer">Abrir programa oficial ↗</a></p></div>
+  {% endfor %}
+  </div>
+  <p class="notice">Você precisa ter sua própria conta aprovada e usar links de afiliado gerados por ela. Não cole senhas ou tokens aqui.</p>
+</section>
+<section class="panel">
+  <div class="section-head"><h2>Adicionar produto para avaliar</h2></div>
+  <form method="post" class="form-grid">
+    <label>Nome do produto<input name="product_name" required maxlength="240" placeholder="Nome do curso ou produto"></label>
+    <label>Plataforma<select name="platform" required><option value="">Selecione</option><option>Hotmart</option><option>Mercado Livre</option><option>Amazon</option></select></label>
+    <label>Link público do produto<input name="product_url" type="url" placeholder="https://..."></label>
+    <label>Seu link de afiliado (se já tiver)<input name="affiliate_url" type="url" placeholder="https://..."></label>
+    <label>Comissão informada<input name="commission_note" maxlength="160" placeholder="Ex.: conferir no painel oficial"></label>
+    <label>Preço observado<input name="price_note" maxlength="160" placeholder="Ex.: R$ 99,90 — verificar data"></label>
+    <label class="wide">Notas de avaliação<textarea name="notes" rows="3" maxlength="2000" placeholder="Reputação, regras, público, data de verificação..."></textarea></label>
+    <div class="wide form-actions"><button class="button" type="submit">Salvar no catálogo</button></div>
+  </form>
+</section>
+<section class="panel">
+  <div class="section-head"><h2>Produtos registrados</h2><span class="muted">{{ products|length }} no catálogo</span></div>
+  {% if products %}
+  <div class="table-wrap"><table><thead><tr><th>Produto</th><th>Plataforma</th><th>Comissão</th><th>Preço</th><th>Status</th><th>Links</th></tr></thead><tbody>
+  {% for p in products %}<tr><td><strong>{{ p.product_name }}</strong>{% if p.notes %}<small>{{ p.notes }}</small>{% endif %}</td><td>{{ p.platform }}</td><td>{{ p.commission_note or 'Não verificada' }}</td><td>{{ p.price_note or 'Não verificado' }}</td><td><span class="status">{{ p.status }}</span></td><td>{% if p.product_url %}<a href="{{ p.product_url }}" target="_blank" rel="noopener noreferrer">Produto ↗</a>{% endif %}{% if p.affiliate_url %}<small><a href="{{ p.affiliate_url }}" target="_blank" rel="noopener noreferrer">Link afiliado ↗</a></small>{% endif %}</td></tr>{% endfor %}
+  </tbody></table></div>
+  {% else %}<p class="muted">Nenhum produto registrado ainda. A tela já está preparada para organizar os produtos e os links.</p>{% endif %}
+</section>
+{% endblock %}
