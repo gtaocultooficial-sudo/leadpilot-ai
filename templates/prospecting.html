@@ -7,8 +7,8 @@
   <form class="form-grid" method="post" action="{{ url_for('prospecting_tools.start_search') }}">
     <label>Segmento ou tipo de empresa *<input name="segment" value="{{ segment }}" required maxlength="80" placeholder="Ex.: barbearias, clínicas, restaurantes"></label>
     <label>Cidade ou região *<input name="city" value="{{ city }}" required maxlength="120" placeholder="Ex.: Guarulhos, SP"></label>
-    <div class="wide form-actions"><button class="button ghost" type="submit" name="mode" value="review">Buscar para revisar</button><button class="button" type="submit" name="mode" value="autopilot">IA: buscar e cadastrar sozinha</button><a class="button ghost" href="{{ url_for('prospecting_tools.prospecting') }}">Limpar</a></div>
-    <p class="wide muted">No piloto automático, a IA cadastra os resultados e evita duplicatas. Empresas com município não confirmado ficam sinalizadas para conferência; nenhuma mensagem é enviada.</p>
+    <div class="wide form-actions"><button class="button ghost" type="submit" name="mode" value="review">Buscar para revisar</button><button class="button" type="submit" name="mode" value="autopilot">Buscar e cadastrar automaticamente</button><a class="button ghost" href="{{ url_for('prospecting_tools.prospecting') }}">Limpar</a></div>
+    <p class="wide muted">O modo automático consulta dados públicos do OpenStreetMap, cadastra resultados elegíveis e evita duplicatas. Depois, tenta pesquisar contatos comerciais públicos. Confira os dados antes de abordar empresas; nenhuma mensagem é enviada automaticamente.</p>
   </form>
 </section>
 {% if searched %}
