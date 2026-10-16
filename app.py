@@ -225,6 +225,10 @@ def leads():
         sql += " AND COALESCE(website,'')<>'' AND COALESCE(email,'')='' AND COALESCE(phone,'')=''"
     elif channel == "missing":
         sql += " AND COALESCE(website,'')='' AND COALESCE(email,'')='' AND COALESCE(phone,'')=''"
+
+    elif channel == "research":
+        sql += " AND notes ILIKE %s AND COALESCE(website,'')='' AND COALESCE(email,'')='' AND COALESCE(phone,'')=''"
+        params.append("%[Pesquisa pública sem contato]%")
     if quality == "incomplete":
         sql += " AND score < 40"
     elif quality == "review":
