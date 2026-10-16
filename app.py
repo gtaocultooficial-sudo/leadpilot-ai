@@ -435,16 +435,13 @@ def lead_research(lead_id):
                 mismatched_locations.sort(key=lambda item: item[2], reverse=True)
                 found_name, reported_city, _score, wrong_feature = mismatched_locations[0]
                 wrong_props = wrong_feature.get("properties") or {}
-                wrong_type = str(wrong_props.get("osm_type") or "").upper()
-                wrong_id = wrong_props.get("osm_id")
-                type_full = {"N": "node", "W": "way", "R": "relation"}.get(wrong_type, wrong_type.lower())
-                wrong_url = f"https://www.openstreetmap.org/{type_full}/{wrong_id}" if type_full and wrong_id else "https://www.openstreetmap.org/"
                 enrichment_message = (
                     f"A fonte encontrou o nome “{found_name}”, mas registrou o município como “{reported_city}”, "
                     f"não “{clean_city}”. Nenhum dado foi sugerido nem alterado. "
                     "Confira se é a mesma unidade antes de preencher o cadastro."
                 )
-                enrichment_source_checked = f"Resultado divergente no OpenStreetMap / Photon — {wrong_url}"
+                # Do not prefill the source confirmation field with a mismatched listing.
+                enrichment_source_checked = ""
             elif not candidates:
                 enrichment_message = (
                     "A fonte pública não encontrou uma correspondência confiável que também confirme o município pesquisado. "
