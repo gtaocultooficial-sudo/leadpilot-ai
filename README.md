@@ -6,6 +6,7 @@ Aplicação independente para registrar e acompanhar oportunidades comerciais. N
 - Painel de leads, métricas e status comercial.
 - Cadastro/edição, busca e filtro de leads.
 - Pontuação inicial baseada nas informações disponíveis.
+- Prospecção assistida por segmento e cidade, com links para pesquisas públicas no Maps e buscadores.
 - Rascunhos de abordagem com revisão humana; não envia mensagens automaticamente.
 - Importação/exportação CSV.
 - Login obrigatório para as páginas comerciais.
@@ -34,4 +35,4 @@ python -c "import getpass,hashlib; print(hashlib.sha256(getpass.getpass('Senha: 
 5. Configure as variáveis acima antes do deploy. Use a URL interna do banco PostgreSQL quando o banco e o serviço estiverem no Render.
 
 ## Limites conhecidos
-Esta versão ainda não pesquisa empresas automaticamente, não usa API de IA externa e não envia mensagens. A pontuação é heurística e os textos gerados precisam de revisão. Próximos passos: conectar fontes empresariais autorizadas, deduplicar resultados, qualificar oportunidades e só então avaliar integrações de contato com limites, opt-out e respeito à LGPD.
+Esta versão oferece pesquisa assistida por segmento/cidade via links externos, mas não coleta automaticamente resultados dos buscadores, não usa API de IA externa e não envia mensagens. A pontuação é heurística e os textos gerados precisam de revisão. Próximos passos: conectar fontes empresariais autorizadas, deduplicar resultados, qualificar oportunidades e só então avaliar integrações de contato com limites, opt-out e respeito à LGPD.
