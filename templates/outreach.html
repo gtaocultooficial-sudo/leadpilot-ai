@@ -10,6 +10,7 @@
   <select name="status">
     <option value="draft" {% if selected_state=='draft' %}selected{% endif %}>Pendentes</option>
     <option value="sent" {% if selected_state=='sent' %}selected{% endif %}>Envio confirmado manualmente</option>
+    <option value="followup" {% if selected_state=='followup' %}selected{% endif %}>Acompanhamentos agendados</option>
     <option value="archived" {% if selected_state=='archived' %}selected{% endif %}>Arquivados</option>
   </select>
   <button class="button secondary" type="submit">Filtrar fila</button>
@@ -30,6 +31,13 @@
       </div>
       <span class="status">{% if d.status=='draft' %}Pendente{% elif d.status=='sent' %}Envio confirmado{% else %}Arquivado{% endif %}</span>
     </div>
+    {% if d.status=='sent' and d.follow_up_date %}
+      <p><strong>Próximo acompanhamento:</strong> {{ d.follow_up_date }}
+      {% if d.follow_up_date < today_local %}<span class="status" style="background:#fff0ee;color:#a22e24">Atrasado</span>
+      {% elif d.follow_up_date == today_local %}<span class="status">Para hoje</span>
+      {% endif %}</p>
+      {% if d.follow_up_note %}<p class="muted">{{ d.follow_up_note }}</p>{% endif %}
+    {% endif %}
     {% if d.subject %}<p><strong>Assunto:</strong> {{ d.subject }}</p>{% endif %}
     <label>Mensagem preparada
       <textarea id="draft-{{ d.id }}" rows="7" readonly style="width:100%;margin-top:6px">{{ d.body }}</textarea>
@@ -46,6 +54,23 @@
       {% endif %}
       <a class="button ghost" href="{{ url_for('lead_research', lead_id=d.lead_id) }}">Ver fonte / conferir dados</a>
     </div>
+    {% if d.status=='sent' %}
+    <div class="panel" style="margin-top:14px">
+      <h4 style="margin:0 0 10px">Agendar próximo acompanhamento</h4>
+      <form method="post" action="{{ url_for('schedule_outreach_follow_up', draft_id=d.id) }}" class="form-grid">
+        <label>Data do retorno
+          <input type="date" name="follow_up_date" value="{{ d.follow_up_date or '' }}">
+        </label>
+        <label>Nota para lembrar o contexto
+          <input type="text" name="follow_up_note" maxlength="1000" value="{{ d.follow_up_note or '' }}" placeholder="Ex.: perguntar se avaliou a proposta">
+        </label>
+        <div class="form-actions wide">
+          <button class="button secondary" type="submit">Salvar acompanhamento</button>
+        </div>
+      </form>
+      <p class="muted" style="margin-top:8px">Deixe a data vazia para remover o agendamento. O app não envia mensagens nem dispara notificações.</p>
+    </div>
+    {% endif %}
     <p class="muted" style="margin-top:12px">Criado em {{ d.created_at }} · Status do lead: {{ d.lead_status }}</p>
   </article>
   {% endfor %}
