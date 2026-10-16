@@ -543,6 +543,16 @@ def lead_research(lead_id):
             "url": "https://www.google.com/search?q=" + quote(f'"{company}" {city} site oficial'),
         },
         {
+            "title": "Busca pelo nome e endereço exatos",
+            "description": "Ajuda a separar empresas com nomes parecidos e confirmar a unidade correta.",
+            "url": "https://www.google.com/search?q=" + quote(f'"{company}" "{city}" "{(lead.get("address") or "Av. Suplicy 741").strip()}" telefone contato'),
+        },
+        {
+            "title": "Busca em redes sociais",
+            "description": "Procure perfil comercial público vinculado ao nome e ao município; confirme o endereço antes de associar o perfil.",
+            "url": "https://www.google.com/search?q=" + quote(f'site:instagram.com "{company}" "{city}" OR site:facebook.com "{company}" "{city}"'),
+        },
+        {
             "title": "Telefone e contato comercial",
             "description": "Procure telefone comercial publicado e confira no site oficial.",
             "url": "https://www.google.com/search?q=" + quote(f'"{company}" {city} telefone contato'),
@@ -970,6 +980,45 @@ def lead_research(lead_id):
         enrichment_source_checked=enrichment_source_checked,
         has_saved_osm_reference=has_saved_osm_reference,
     )
+
+
+@app.route("/leads/<int:lead_id>/research/no-contact", methods=["POST"])
+@login_required
+def record_no_public_contact(lead_id):
+    """Record a verified public-source attempt that yielded no commercial contact."""
+    checked_source = request.form.get("checked_source", "").strip()[:240]
+    source_url = request.form.get("source_url", "").strip()
+    if not checked_source:
+        checked_source = "OpenStreetMap / Photon / Overpass"
+    if source_url:
+        parsed = urlparse(source_url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            source_url = ""
+
+    now = now_iso()
+    marker_text = "[Pesquisa pública sem contato]"
+    with db() as conn:
+        existing = conn.execute("SELECT * FROM leads WHERE id=%s", (lead_id,)).fetchone()
+        if not existing:
+            flash("Lead não encontrado.", "error")
+            return redirect(url_for("leads"))
+        notes = (existing.get("notes") or "").strip()
+        audit = (
+            f"{marker_text} {now} | Fonte: {checked_source}"
+            + (f" | Registro consultado: {source_url}" if source_url else "")
+            + " | Resultado: município conferido, mas a fonte não lista site, telefone ou e-mail."
+        )
+        new_notes = (notes + "\n" + audit).strip() if notes else audit
+        conn.execute(
+            "UPDATE leads SET notes=%s, updated_at=%s WHERE id=%s",
+            (new_notes, now, lead_id),
+        )
+
+    flash(
+        "Tentativa de pesquisa registrada. O lead foi preservado e marcado para busca comercial adicional.",
+        "success",
+    )
+    return redirect(url_for("lead_research", lead_id=lead_id))
 
 
 @app.route("/leads/<int:lead_id>/research/discard-source", methods=["POST"])
