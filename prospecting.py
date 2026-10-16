@@ -400,6 +400,34 @@ def _photon_city_bbox(city):
     return clean_city, ",".join(f"{v:.6f}" for v in (min_lon, min_lat, max_lon, max_lat))
 
 
+def _filter_city_consistent_results(clean_city, results):
+    """Drop cached or fresh results that explicitly identify another municipality."""
+    expected = _normalize_city_name(clean_city)
+    kept = []
+    rejected = []
+    for raw in results:
+        item = dict(raw)
+        source_city = (item.get("source_city") or item.get("city") or "").strip()
+        if source_city and _normalize_city_name(source_city) != expected:
+            rejected.append(source_city)
+            continue
+        item["source_city"] = source_city
+        item["city_verified"] = bool(source_city)
+        kept.append(item)
+    if not kept and rejected:
+        most_common = sorted(set(rejected), key=lambda name: (-rejected.count(name), name))[0]
+        current_app.logger.warning(
+            "All cached/prospected businesses rejected due to municipality conflict: requested=%s rejected=%s",
+            clean_city, sorted(set(rejected))
+        )
+        raise RuntimeError(
+            f"A fonte retornou empresas marcadas como “{most_common}”, não “{clean_city}”. "
+            "Esses resultados foram excluídos para evitar cadastrar empresas de outra cidade. "
+            "Faça uma nova pesquisa e confira a localização antes de importar."
+        )
+    return kept, rejected
+
+
 def _photon_tags(segment):
     tags = _search_tags(segment)
     return [f"osm.{key}.{value}" for key, value in tags]
@@ -498,7 +526,11 @@ def _get_results(segment, city):
     cache_key = hashlib.sha256(f"{segment.casefold()}|{city.casefold().strip()}".encode("utf-8")).hexdigest()
     cached = _cached_results(cache_key)
     if cached is not None:
-        return cache_key, clean_city, cached, "cache"
+        safe_cached, rejected_cached = _filter_city_consistent_results(clean_city, cached)
+        if rejected_cached:
+            # Replace stale 12-hour cache records created before municipality validation.
+            _save_cache(cache_key, segment, city, safe_cached)
+        return cache_key, clean_city, safe_cached, "cache"
 
     # Re-use a shared-service throttle so a user cannot repeatedly call public APIs.
     db, now_iso, _ = _db_helpers()
@@ -541,6 +573,7 @@ def _get_results(segment, city):
     # Preserve the complete user-provided city label (including state) in the cache
     # and use it consistently for imported leads; Photon may return the neighboring metro label.
     requested_city = city.strip()
+    results, _rejected = _filter_city_consistent_results(clean_city, results)
     _save_cache(cache_key, segment, requested_city, results)
     return cache_key, requested_city, results, "photon"
 
@@ -789,6 +822,10 @@ def import_selected():
             osm_marker = f"OpenStreetMap item: {osm_url}" if valid_osm_ref else ""
             item_address = (item.get("address") or "").strip()
             note_parts = [item_address] if item_address else []
+            if item.get("city_verified") and item.get("source_city"):
+                note_parts.append(f"Município informado pela fonte: {item['source_city']}")
+            elif not item.get("city_verified"):
+                note_parts.append("Município não informado na fonte; revisar localização antes de contato")
             if osm_marker:
                 note_parts.append(osm_marker)
             imported_notes = "\n".join(note_parts)
