@@ -1,0 +1,36 @@
+{% extends "base.html" %}{% block title %}Prospecção assistida · LeadPilot AI{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div><p class="eyebrow">PROSPECÇÃO</p><h1>Encontre empresas para abordar</h1><p class="muted">Monte buscas por segmento e cidade e revise os resultados antes de cadastrar oportunidades.</p></div>
+</section>
+<section class="panel">
+  <form class="form-grid" method="get" action="{{ url_for('prospecting_tools.prospecting') }}">
+    <label>Segmento ou tipo de empresa *<input name="segment" value="{{ segment }}" required maxlength="80" placeholder="Ex.: barbearias, clínicas, restaurantes"></label>
+    <label>Cidade ou região *<input name="city" value="{{ city }}" required maxlength="120" placeholder="Ex.: Campinas, SP"></label>
+    <div class="wide form-actions"><button class="button" type="submit" name="search" value="1">Gerar pesquisas</button><a class="button ghost" href="{{ url_for('prospecting_tools.prospecting') }}">Limpar</a></div>
+  </form>
+</section>
+{% if searched %}
+<section class="panel">
+  <div class="section-head"><h2>Pesquisas para {{ segment }} · {{ city }}</h2></div>
+  <div class="stats">
+    <div class="stat"><span>Mapa e empresas locais</span><p class="muted">Veja empresas, localização e site quando informado.</p><a class="button" href="{{ maps_url }}" target="_blank" rel="noopener noreferrer">Pesquisar no Maps ↗</a></div>
+    <div class="stat"><span>Pesquisa na web</span><p class="muted">Procure sites oficiais e páginas comerciais.</p><a class="button secondary" href="{{ google_url }}" target="_blank" rel="noopener noreferrer">Pesquisar no Google ↗</a></div>
+    <div class="stat"><span>Pesquisa alternativa</span><p class="muted">Compare resultados em outro buscador.</p><a class="button ghost" href="{{ bing_url }}" target="_blank" rel="noopener noreferrer">Pesquisar no Bing ↗</a></div>
+  </div>
+  <div class="notice"><strong>Como funciona:</strong> esta versão abre pesquisas públicas, mas não extrai automaticamente os resultados nem envia mensagens. Confira se cada empresa existe e se é relevante, registre a fonte e cadastre somente as oportunidades adequadas.</div>
+  <div class="form-actions" style="margin-top:18px"><a class="button" href="{{ register_url }}">Cadastrar uma empresa encontrada</a><a class="button ghost" href="{{ url_for('import_csv') }}">Importar lista autorizada (CSV)</a></div>
+</section>
+{% endif %}
+<section class="panel">
+  <h2>Fluxo recomendado</h2>
+  <div class="funnel">
+    <div class="funnel-item"><span>1 · Pesquisar</span><b>Segmento + cidade</b></div>
+    <div class="funnel-item"><span>2 · Conferir</span><b>Site e relevância</b></div>
+    <div class="funnel-item"><span>3 · Registrar</span><b>Fonte do lead</b></div>
+    <div class="funnel-item"><span>4 · Qualificar</span><b>Necessidade real</b></div>
+    <div class="funnel-item"><span>5 · Abordar</span><b>Revisão humana</b></div>
+  </div>
+  <p class="notice">O score atual é heurístico, não é garantia de intenção de compra. Respeite a LGPD, os termos dos sites e pedidos para não receber novos contatos.</p>
+</section>
+{% endblock %}
