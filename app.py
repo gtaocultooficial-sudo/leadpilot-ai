@@ -399,6 +399,7 @@ def lead_research(lead_id):
             company_norm = _normalize_match_text(company)
             city_norm = _normalize_match_text(clean_city)
             candidates = []
+            mismatched_locations = []
             for feature in features:
                 props = feature.get("properties") or {}
                 found_name = (props.get("name") or "").strip()
@@ -410,21 +411,43 @@ def lead_research(lead_id):
                     if min(len(company_norm), len(found_norm)) >= 4:
                         name_score = max(name_score, 0.84)
 
-                found_city = _normalize_match_text(
-                    props.get("city") or props.get("locality") or props.get("district") or ""
-                )
+                # Treat city/locality as the municipality signal. A district name by
+                # itself is not proof that the establishment is in the requested city.
+                reported_city = (props.get("city") or props.get("locality") or "").strip()
+                found_city = _normalize_match_text(reported_city)
                 city_match = bool(found_city and city_norm and (
                     found_city == city_norm or city_norm in found_city or found_city in city_norm
                 ))
-                # The API query is spatially bounded. Photon sometimes labels an
-                # establishment by its metro area rather than its municipality.
-                if name_score >= 0.72:
-                    place_id = (props.get("osm_type"), props.get("osm_id"))
-                    candidates.append((name_score + (0.08 if city_match else 0), feature, name_score, city_match, place_id))
+                if name_score < 0.72:
+                    continue
+                if reported_city and not city_match:
+                    # Same business name elsewhere is not a safe lead match.
+                    if name_score >= 0.84:
+                        mismatched_locations.append((found_name, reported_city, round(name_score * 100), feature))
+                    continue
+                if not city_match:
+                    # If the public record gives no municipality, don't guess from the name alone.
+                    continue
+                place_id = (props.get("osm_type"), props.get("osm_id"))
+                candidates.append((name_score + 0.08, feature, name_score, city_match, place_id))
 
-            if not candidates:
+            if not candidates and mismatched_locations:
+                mismatched_locations.sort(key=lambda item: item[2], reverse=True)
+                found_name, reported_city, _score, wrong_feature = mismatched_locations[0]
+                wrong_props = wrong_feature.get("properties") or {}
+                wrong_type = str(wrong_props.get("osm_type") or "").upper()
+                wrong_id = wrong_props.get("osm_id")
+                type_full = {"N": "node", "W": "way", "R": "relation"}.get(wrong_type, wrong_type.lower())
+                wrong_url = f"https://www.openstreetmap.org/{type_full}/{wrong_id}" if type_full and wrong_id else "https://www.openstreetmap.org/"
                 enrichment_message = (
-                    "A fonte pública não encontrou uma correspondência suficientemente confiável dentro da área pesquisada. "
+                    f"A fonte encontrou o nome “{found_name}”, mas registrou o município como “{reported_city}”, "
+                    f"não “{clean_city}”. Nenhum dado foi sugerido nem alterado. "
+                    "Confira se é a mesma unidade antes de preencher o cadastro."
+                )
+                enrichment_source_checked = f"Resultado divergente no OpenStreetMap / Photon — {wrong_url}"
+            elif not candidates:
+                enrichment_message = (
+                    "A fonte pública não encontrou uma correspondência confiável que também confirme o município pesquisado. "
                     "Nenhum dado foi alterado. Confira o nome e a cidade nas pesquisas externas."
                 )
             else:
