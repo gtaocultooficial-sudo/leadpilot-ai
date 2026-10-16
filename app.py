@@ -9,6 +9,7 @@ from functools import wraps
 import psycopg
 from psycopg.rows import dict_row
 from flask import Flask, Response, flash, redirect, render_template, request, session, url_for
+from urllib.parse import quote_plus
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 APP_USERNAME = os.environ.get("APP_USERNAME", "")
@@ -307,6 +308,53 @@ def edit_lead(lead_id):
         flash("Lead atualizado.", "success")
         return redirect(url_for("leads"))
     return render_template("lead_form.html", lead=dict(existing), statuses=STATUSES, heading="Editar lead")
+
+
+@app.route("/leads/<int:lead_id>/research")
+@login_required
+def lead_research(lead_id):
+    with db() as conn:
+        lead = conn.execute("SELECT * FROM leads WHERE id=%s", (lead_id,)).fetchone()
+    if not lead:
+        flash("Lead não encontrado.", "error")
+        return redirect(url_for("leads"))
+
+    company = (lead.get("company") or "").strip()
+    city = (lead.get("city") or "").strip()
+    segment = (lead.get("segment") or "").strip()
+    base_query = " ".join(part for part in (company, segment, city) if part)
+    quote = quote_plus
+    research_links = [
+        {
+            "title": "Site oficial",
+            "description": "Procure o domínio e confirme se pertence à empresa certa.",
+            "url": "https://www.google.com/search?q=" + quote(f'"{company}" {city} site oficial'),
+        },
+        {
+            "title": "Telefone e contato comercial",
+            "description": "Procure telefone comercial publicado e confira no site oficial.",
+            "url": "https://www.google.com/search?q=" + quote(f'"{company}" {city} telefone contato'),
+        },
+        {
+            "title": "Mapa e endereço",
+            "description": "Confira localização, nome e correspondência com a empresa cadastrada.",
+            "url": "https://www.google.com/maps/search/?api=1&query=" + quote(base_query),
+        },
+        {
+            "title": "Perfis comerciais",
+            "description": "Procure perfis públicos da empresa para confirmar identidade e atividade.",
+            "url": "https://www.google.com/search?q=" + quote(f'"{company}" {city} Instagram Facebook'),
+        },
+        {
+            "title": "Busca alternativa",
+            "description": "Compare resultados em outro buscador, se necessário.",
+            "url": "https://www.bing.com/search?q=" + quote(f'"{company}" {city} contato comercial'),
+        },
+    ]
+    return render_template(
+        "research.html", lead=lead, research_links=research_links,
+        base_query=base_query
+    )
 
 
 @app.route("/leads/<int:lead_id>/message")
