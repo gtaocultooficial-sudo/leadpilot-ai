@@ -871,6 +871,7 @@ def leads():
     status = request.args.get("status", "").strip()
     channel = request.args.get("channel", "").strip()
     quality = request.args.get("quality", "").strip()
+    readiness = request.args.get("readiness", "").strip()
     sql = "SELECT * FROM leads WHERE TRUE"
     params = []
     if query:
@@ -889,6 +890,10 @@ def leads():
     elif channel == "research":
         sql += " AND notes ILIKE %s AND COALESCE(website,'')='' AND COALESCE(email,'')='' AND COALESCE(phone,'')=''"
         params.append("%[Pesquisa pública sem contato]%")
+    if readiness == "contactable":
+        sql += " AND (COALESCE(email,'')<>'' OR COALESCE(phone,'')<>'') AND status NOT IN ('Cliente','Sem interesse')"
+    elif readiness == "missing_channel":
+        sql += " AND COALESCE(email,'')='' AND COALESCE(phone,'')='' AND status NOT IN ('Cliente','Sem interesse')"
     if quality == "incomplete":
         sql += " AND score < 40"
     elif quality == "review":
@@ -917,7 +922,9 @@ def leads():
         else:
             lead["channel_label"] = "Sem canal cadastrado"
             lead["channel_hint"] = "Pesquise um meio comercial público antes de abordar"
-        if lead["score"] < 40:
+        if has_direct and lead.get("status") not in ("Cliente", "Sem interesse"):
+            lead["next_step"] = "Revisar e preparar abordagem"
+        elif lead["score"] < 40:
             lead["quality_label"] = "Dados incompletos"
             lead["next_step"] = "Completar os dados básicos"
         elif lead["score"] < 70:
@@ -953,7 +960,7 @@ def leads():
 
     return render_template(
         "leads.html", rows=decorated, statuses=STATUSES, q=query,
-        selected_status=status, selected_channel=channel, selected_quality=quality,
+        selected_status=status, selected_channel=channel, selected_quality=quality, selected_readiness=readiness,
         research_job=dict(research_job) if research_job else None,
         draft_job=dict(draft_job) if draft_job else None,
     )
