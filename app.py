@@ -498,23 +498,92 @@ def lead_research(lead_id):
                         "Nenhum dado foi sugerido nem alterado; confira a fonte original."
                     )
                 else:
-                    reported_city = (
+                    tag_city = (
                         tags.get("addr:city")
                         or tags.get("addr:place")
                         or tags.get("is_in:city")
                         or ""
                     ).strip()
-                    city_norm = _normalize_match_text(city.split(",")[0])
-                    found_city = _normalize_match_text(reported_city)
-                    city_match = bool(found_city and city_norm and (
-                        found_city == city_norm or city_norm in found_city or found_city in city_norm
-                    ))
-                    if reported_city and not city_match:
-                        enrichment_message = (
-                            f"O registro original “{found_name}” informa o município “{reported_city}”, "
-                            f"não “{city.split(',')[0].strip()}”. Nenhum contato foi sugerido. "
-                            "Confirme a unidade no mapa antes de usar estes dados."
+                    reverse_location = {}
+                    if saved_item.get("lat") is not None and saved_item.get("lon") is not None:
+                        try:
+                            reverse_location = _photon_reverse_location(saved_item["lat"], saved_item["lon"])
+                        except Exception as reverse_exc:
+                            app.logger.warning(
+                                "Photon reverse lookup unavailable for lead id=%s: %s",
+                                lead_id, str(reverse_exc)[:180]
+                            )
+
+                    requested_city = city.split(",")[0].strip()
+                    city_norm = _normalize_match_text(requested_city)
+                    reverse_city = (reverse_location.get("city") or "").strip()
+                    tag_city_matches = bool(
+                        tag_city and city_norm
+                        and _normalize_match_text(tag_city) == city_norm
+                    )
+                    reverse_city_matches = bool(
+                        reverse_city and city_norm
+                        and _normalize_match_text(reverse_city) == city_norm
+                    )
+                    mismatched_cities = [
+                        value for value, matches in (
+                            (tag_city, tag_city_matches),
+                            (reverse_city, reverse_city_matches),
                         )
+                        if value and not matches
+                    ]
+                    verified_city = (
+                        reverse_city if reverse_city_matches
+                        else tag_city if tag_city_matches
+                        else ""
+                    )
+                    reported_city = (
+                        mismatched_cities[0] if mismatched_cities
+                        else verified_city
+                        or tag_city
+                        or reverse_city
+                    )
+                    location_address = reverse_location.get("address") or ""
+                    location_method = (
+                        "Tags do registro original do OpenStreetMap"
+                        if tag_city_matches
+                        else "Coordenadas conferidas pelo Photon"
+                        if reverse_city_matches
+                        else "Localização ainda não confirmada"
+                    )
+
+                    if mismatched_cities:
+                        other_city = mismatched_cities[0]
+                        enrichment_message = (
+                            f"O nome “{found_name}” coincide, mas a localização pública aponta para “{other_city}”, "
+                            f"não “{requested_city}”. Nenhum contato foi sugerido nem alterado. "
+                            "Confira a unidade no mapa antes de usar estes dados."
+                        )
+                        enrichment_match = {
+                            "name": found_name or company,
+                            "city": reported_city or "Não especificado no registro",
+                            "address": location_address,
+                            "location_method": location_method,
+                            "score": round(name_score * 100),
+                            "city_match": False,
+                            "source_url": saved_item["url"],
+                            "found_count": 0,
+                        }
+                    elif not verified_city:
+                        enrichment_message = (
+                            "O registro original foi localizado, mas nem as etiquetas nem a consulta das coordenadas "
+                            "confirmaram o município. Nenhum contato foi sugerido nem alterado."
+                        )
+                        enrichment_match = {
+                            "name": found_name or company,
+                            "city": reported_city or "Não especificado no registro",
+                            "address": location_address,
+                            "location_method": location_method,
+                            "score": round(name_score * 100),
+                            "city_match": False,
+                            "source_url": saved_item["url"],
+                            "found_count": 0,
+                        }
                     else:
                         extra = tags
                         website = _photon_contact_value({}, extra, "website", "contact:website", "url")
@@ -530,30 +599,29 @@ def lead_research(lead_id):
                         suggestions = {"website": website, "email": email, "phone": phone[:80]}
                         enrichment_match = {
                             "name": found_name or company,
-                            "city": reported_city or "Não especificado no registro",
+                            "city": verified_city,
+                            "address": location_address,
+                            "location_method": location_method,
                             "score": round(name_score * 100),
-                            "city_match": city_match,
+                            "city_match": True,
                             "source_url": saved_item["url"],
                             "found_count": sum(bool(value) for value in suggestions.values()),
                         }
-                        if reported_city and city_match:
-                            enrichment_source_checked = f"OpenStreetMap — registro original: {saved_item['url']}"
+                        enrichment_source_checked = (
+                            f"OpenStreetMap — registro original: {saved_item['url']}; "
+                            f"localização conferida via {location_method}"
+                        )
                         if enrichment_match["found_count"]:
-                            if reported_city and city_match:
-                                enrichment_message = (
-                                    f"Encontramos {enrichment_match['found_count']} campo(s) comercial(is) no registro original, "
-                                    "e o município coincide com o cadastro. Confira cada valor antes de salvar."
-                                )
-                            else:
-                                enrichment_message = (
-                                    f"O registro original contém {enrichment_match['found_count']} campo(s) comercial(is), "
-                                    "mas não informa explicitamente o município. Confira a localização manualmente; a fonte não foi marcada como verificada."
-                                )
+                            enrichment_message = (
+                                f"Encontramos {enrichment_match['found_count']} campo(s) comercial(is) no registro original, "
+                                f"e a localização foi confirmada como “{verified_city}”. Confira cada valor antes de salvar."
+                            )
                         else:
                             enrichment_message = (
-                                "O registro original foi localizado, mas não lista site, e-mail ou telefone. "
-                                "Nenhum contato foi inventado nem alterado."
+                                f"A empresa e o município “{verified_city}” foram confirmados, mas o registro original "
+                                "não lista site, e-mail ou telefone. Nenhum contato foi inventado nem alterado."
                             )
+
             else:
                 # Leads imported before the OSM item ID was saved use the conservative
                 # Photon search, rejecting results whose municipality conflicts.
