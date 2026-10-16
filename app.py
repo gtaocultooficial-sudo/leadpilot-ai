@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from functools import wraps
 
 import psycopg
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
 from psycopg.rows import dict_row
 from flask import Flask, Response, flash, redirect, render_template, request, session, url_for
 from urllib.parse import quote_plus, urlencode, urlparse
@@ -1314,6 +1316,89 @@ def import_csv():
             flash("Não foi possível importar o arquivo. Confira o CSV e tente novamente.", "error")
         return redirect(url_for("leads"))
     return render_template("import.html")
+
+
+@app.route("/export.xlsx")
+@login_required
+def export_xlsx():
+    """Download a formatted Excel workbook with readable column widths."""
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT company,contact_name,email,phone,website,segment,city,source,need,notes,status,score,consent_basis,created_at,updated_at FROM leads ORDER BY id"
+        ).fetchall()
+
+    headers = [
+        "company", "contact_name", "email", "phone", "website", "segment", "city",
+        "source", "need", "notes", "status", "score", "consent_basis", "created_at", "updated_at"
+    ]
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Leads"
+
+    sheet.append(headers)
+    header_fill = PatternFill(fill_type="solid", fgColor="1F3765")
+    header_font = Font(color="FFFFFF", bold=True)
+    for cell in sheet[1]:
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(vertical="center", wrap_text=True)
+    sheet.row_dimensions[1].height = 28
+
+    for row in rows:
+        values = []
+        for key in headers:
+            value = row.get(key)
+            if isinstance(value, str):
+                value = value.replace("\r\n", "\n").replace("\r", "\n")
+            values.append(value)
+        sheet.append(values)
+
+    min_widths = {
+        "company": 25, "contact_name": 20, "email": 28, "phone": 17, "website": 30,
+        "segment": 18, "city": 23, "source": 24, "need": 30, "notes": 52,
+        "status": 14, "score": 10, "consent_basis": 34, "created_at": 22, "updated_at": 22,
+    }
+    for col_idx, header in enumerate(headers, start=1):
+        letter = sheet.cell(row=1, column=col_idx).column_letter
+        cap = 60 if header in {"notes", "need", "consent_basis", "website", "source"} else 38
+        max_len = len(header)
+        for col_cells in sheet.iter_cols(min_col=col_idx, max_col=col_idx, min_row=2, max_row=sheet.max_row):
+            for item in col_cells:
+                if item.value is not None:
+                    max_len = max(max_len, max((len(line) for line in str(item.value).splitlines()), default=0))
+        sheet.column_dimensions[letter].width = min(max(min_widths.get(header, 14), max_len + 2), cap)
+
+    wrap_cols = {8, 9, 10, 13}
+    for row_cells in sheet.iter_rows(min_row=2):
+        for cell in row_cells:
+            cell.alignment = Alignment(vertical="top", wrap_text=cell.column in wrap_cols)
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = sheet.dimensions
+    sheet.sheet_view.showGridLines = False
+
+    info = workbook.create_sheet("Como usar")
+    info.append(["Campo", "Descrição"])
+    info.append(["Score", "Mede a completude dos dados cadastrados; não é uma previsão comprovada de compra."])
+    info.append(["Notas", "Histórico e observações do lead. Quebras de linha são preservadas nesta exportação Excel."])
+    info.append(["Privacidade", "Use apenas dados comerciais necessários e respeite a LGPD e pedidos para não receber contato."])
+    for cell in info[1]:
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(vertical="center", wrap_text=True)
+    info.column_dimensions["A"].width = 18
+    info.column_dimensions["B"].width = 100
+    for cells in info.iter_rows(min_row=2):
+        for cell in cells:
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+
+    output = io.BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return Response(
+        output.getvalue(),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="leadpilot_leads.xlsx"'},
+    )
 
 
 @app.route("/export")
