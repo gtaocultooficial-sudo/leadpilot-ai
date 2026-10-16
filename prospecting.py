@@ -689,6 +689,8 @@ def prospecting():
 def import_selected():
     from app import db, now_iso, score_lead
     cache_key = request.form.get("cache_key", "")
+    query_city = request.form.get("query_city", "").strip()[:120]
+    query_segment = request.form.get("query_segment", "").strip()[:80]
     selected = set(request.form.getlist("selected"))
     if not cache_key or not selected:
         flash("Selecione ao menos uma empresa para cadastrar.", "error")
@@ -721,12 +723,14 @@ def import_selected():
             if exists:
                 # Re-importing an already-imported OSM company from a more specific city query
                 # corrects the inaccurate provider city label instead of creating a duplicate.
+                target_city = query_city or row["city"]
+                target_segment = query_segment or row["segment"]
                 if (exists["source"] == "OpenStreetMap (ODbL)"
-                    and (exists["segment"] or "").casefold() == (row["segment"] or "").casefold()
-                    and (exists["city"] or "").casefold() != (row["city"] or "").casefold()):
+                    and (exists["segment"] or "").casefold() == (target_segment or "").casefold()
+                    and (exists["city"] or "").casefold() != (target_city or "").casefold()):
                     conn.execute(
                         "UPDATE leads SET city=%s, updated_at=%s WHERE id=%s",
-                        (row["city"], now, exists["id"]),
+                        (target_city, now, exists["id"]),
                     )
                     skipped += 1
                 else:
@@ -738,8 +742,8 @@ def import_selected():
                 "email": item.get("email", ""),
                 "phone": item.get("phone", ""),
                 "website": item.get("website", ""),
-                "segment": row["segment"],
-                "city": row["city"],
+                "segment": query_segment or row["segment"],
+                "city": query_city or row["city"],
                 "source": "OpenStreetMap (ODbL)",
                 "need": "",
                 "notes": item.get("address", ""),
