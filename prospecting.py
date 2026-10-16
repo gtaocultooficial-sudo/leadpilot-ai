@@ -480,8 +480,11 @@ def _get_results(segment, city):
         current_app.logger.warning("Photon indisponível (%s): %s", type(exc).__name__, str(exc)[:200])
         raise RuntimeError("A fonte pública de empresas está indisponível ou demorou demais. Nenhum lead foi importado; tente mais tarde ou use os links abaixo.") from exc
 
-    _save_cache(cache_key, segment, result_city, results)
-    return cache_key, result_city, results, "photon"
+    # Preserve the complete user-provided city label (including state) in the cache
+    # and use it consistently for imported leads; Photon may return the neighboring metro label.
+    requested_city = city.strip()
+    _save_cache(cache_key, segment, requested_city, results)
+    return cache_key, requested_city, results, "photon"
 
 
 def _ensure_jobs():
@@ -712,11 +715,22 @@ def import_selected():
     with db() as conn:
         for item in chosen:
             exists = conn.execute(
-                "SELECT id FROM leads WHERE lower(company)=lower(%s) AND lower(city)=lower(%s) LIMIT 1",
-                (item["name"], row["city"]),
+                "SELECT id, city, source, segment FROM leads WHERE lower(company)=lower(%s) LIMIT 1",
+                (item["name"],),
             ).fetchone()
             if exists:
-                skipped += 1
+                # Re-importing an already-imported OSM company from a more specific city query
+                # corrects the inaccurate provider city label instead of creating a duplicate.
+                if (exists["source"] == "OpenStreetMap (ODbL)"
+                    and (exists["segment"] or "").casefold() == (row["segment"] or "").casefold()
+                    and (exists["city"] or "").casefold() != (row["city"] or "").casefold()):
+                    conn.execute(
+                        "UPDATE leads SET city=%s, updated_at=%s WHERE id=%s",
+                        (row["city"], now, exists["id"]),
+                    )
+                    skipped += 1
+                else:
+                    skipped += 1
                 continue
             data = {
                 "company": item["name"],
@@ -725,7 +739,7 @@ def import_selected():
                 "phone": item.get("phone", ""),
                 "website": item.get("website", ""),
                 "segment": row["segment"],
-                "city": item.get("city") or row["city"],
+                "city": row["city"],
                 "source": "OpenStreetMap (ODbL)",
                 "need": "",
                 "notes": item.get("address", ""),
