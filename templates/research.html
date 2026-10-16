@@ -72,6 +72,16 @@
     </div>
     {% if enrichment_match.found_count %}
       <p class="muted" style="margin-top:12px">Os campos localizados foram sugeridos no formulário abaixo. Revise e clique em “Salvar dados no lead” para confirmar a gravação.</p>
+    {% elif enrichment_match.city_match %}
+      <div class="notice" style="margin-top:12px">
+        <strong>Localização confirmada, mas sem contato público nesta ficha.</strong>
+        <p>Registre esta tentativa para que o funil mostre que a fonte já foi consultada e a próxima etapa seja pesquisar um diretório comercial ou perfil oficial. Isso não altera o status nem inventa contato.</p>
+        <form method="post" action="{{ url_for('record_no_public_contact', lead_id=lead.id) }}">
+          <input type="hidden" name="checked_source" value="{{ enrichment_source_checked or 'OpenStreetMap / Photon / Overpass' }}">
+          <input type="hidden" name="source_url" value="{{ enrichment_match.source_url or '' }}">
+          <button class="button secondary" type="submit">Registrar: fonte sem contato público</button>
+        </form>
+      </div>
     {% endif %}
   {% endif %}
 </section>
