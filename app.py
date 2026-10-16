@@ -528,6 +528,31 @@ def _find_overpass_business_match(company, city, ignored_urls=None):
     return matches[0]
 
 
+def _research_source_catalog(lead):
+    """Build trusted public search URLs for the lead's actual name and location."""
+    company = (lead.get("company") or "").strip()
+    city = (lead.get("city") or "").strip()
+    notes = (lead.get("notes") or "").strip()
+    first_line = next((line.strip() for line in notes.splitlines() if line.strip()), "")
+    address = first_line if re.search(
+        r"\b(?:rua|r\.|avenida|av\.|alameda|al\.|travessa|tv\.|pra[cç]a|rodovia|estrada)\b",
+        first_line,
+        re.IGNORECASE,
+    ) else ""
+    location_parts = [part for part in (address, city)    research_links = _research_source_catalog(lead)  "key": "guiamais",
+            "title": "Diretório GuiaMais",
+            "description": "Verifique se há listagem comercial para essa empresa e cidade.",
+            "url": "https://www.google.com/search?q=" + quote_plus(f'site:guiamais.com.br "{company}" "{city}" telefone'),
+        },
+        {
+            "key": "apontador",
+            "title": "Diretório Apontador",
+            "description": "Compare nome, cidade e endereço com os outros resultados.",
+            "url": "https://www.google.com/search?q=" + quote_plus(f'site:apontador.com.br "{company}" "{city}"'),
+        },
+    ]
+
+
 @app.route("/leads/<int:lead_id>/research", methods=["GET", "POST"])
 @login_required
 def lead_research(lead_id):
@@ -976,6 +1001,11 @@ def lead_research(lead_id):
         r"OpenStreetMap item:\s*https://www\.openstreetmap\.org/(?:node|way|relation)/\d+",
         lead.get("notes") or "",
     ))
+    research_history = [
+        line for line in (lead.get("notes") or "").splitlines()
+        if line.startswith("[Pesquisa comercial consultada]")
+        or line.startswith("[Pesquisa pública sem contato]")
+    ][-12:][::-1]
     return render_template(
         "research.html",
         lead=lead,
@@ -986,7 +1016,39 @@ def lead_research(lead_id):
         enrichment_message=enrichment_message,
         enrichment_source_checked=enrichment_source_checked,
         has_saved_osm_reference=has_saved_osm_reference,
+        research_history=research_history,
     )
+
+
+@app.route("/leads/<int:lead_id>/research/open/<source>", methods=["POST"])
+@login_required
+def open_research_source(lead_id, source):
+    """Record that a user opened a public search, then redirect to a whitelisted URL."""
+    with db() as conn:
+        raw = conn.execute("SELECT * FROM leads WHERE id=%s", (lead_id,)).fetchone()
+        if not raw:
+            flash("Lead não encontrado.", "error")
+            return redirect(url_for("leads"))
+        lead = dict(raw)
+
+    match = next((item for item in _research_source_catalog(lead) if item["key"] == source), None)
+    if not match:
+        flash("Fonte de pesquisa não reconhecida.", "error")
+        return redirect(url_for("lead_research", lead_id=lead_id))
+
+    now = now_iso()
+    audit = (
+        f"[Pesquisa comercial consultada] {now} | Fonte: {match['title']} "
+        f"| Busca aberta: {match['url']} | Resultado ainda não validado automaticamente."
+    )
+    notes = (lead.get("notes") or "").strip()
+    new_notes = (notes + "\n" + audit).strip() if notes else audit
+    with db() as conn:
+        conn.execute(
+            "UPDATE leads SET notes=%s, updated_at=%s WHERE id=%s",
+            (new_notes, now, lead_id),
+        )
+    return redirect(match["url"], code=302)
 
 
 @app.route("/leads/<int:lead_id>/research/no-contact", methods=["POST"])
