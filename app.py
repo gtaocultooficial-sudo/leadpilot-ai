@@ -278,6 +278,10 @@ def health():
     return {"status": "ok", "app": "LeadPilot AI"}
 
 
+from prospecting import bp as prospecting_bp
+app.register_blueprint(prospecting_bp)
+
+
 if not SECRET_KEY or not APP_USERNAME or not APP_PASSWORD_SHA256:
     raise RuntimeError("Configure SECRET_KEY, APP_USERNAME e APP_PASSWORD_SHA256 antes de iniciar o app.")
 
