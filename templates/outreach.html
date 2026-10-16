@@ -1,0 +1,77 @@
+{% extends "base.html" %}{% block title %}Fila comercial · LeadPilot AI{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div><p class="eyebrow">EXECUÇÃO COMERCIAL</p><h1>Fila de abordagens</h1><p class="muted">Rascunhos preparados pela IA. O app não envia mensagens; confirme o envio somente depois de enviar pelo seu canal comercial.</p></div>
+  <a class="button ghost" href="{{ url_for('leads') }}">Voltar aos leads</a>
+</section>
+
+<form class="filters" method="get">
+  <select name="status">
+    <option value="draft" {% if selected_state=='draft' %}selected{% endif %}>Pendentes</option>
+    <option value="sent" {% if selected_state=='sent' %}selected{% endif %}>Envio confirmado manualmente</option>
+    <option value="archived" {% if selected_state=='archived' %}selected{% endif %}>Arquivados</option>
+  </select>
+  <button class="button secondary" type="submit">Filtrar fila</button>
+  <form method="post" action="{{ url_for('start_auto_draft') }}"><button class="button" type="submit">Preparar novos rascunhos</button></form>
+</form>
+
+<section class="panel">
+{% if rows %}
+  <div class="section-head"><h2>{{ rows|length }} rascunho(s)</h2><span class="muted">Até 100 itens mais recentes</span></div>
+  {% for d in rows %}
+  <article class="panel" style="margin-top:16px">
+    <div class="section-head">
+      <div>
+        <h3>{{ d.company }}</h3>
+        <p class="muted">{{ d.segment or 'Segmento não informado' }} · {{ d.city or 'Cidade não informada' }}</p>
+        <p><strong>{{ d.channel }}</strong> · Destino cadastrado: {{ d.recipient }}</p>
+      </div>
+      <span class="status">{% if d.status=='draft' %}Pendente{% elif d.status=='sent' %}Envio confirmado{% else %}Arquivado{% endif %}</span>
+    </div>
+    {% if d.subject %}<p><strong>Assunto:</strong> {{ d.subject }}</p>{% endif %}
+    <label>Mensagem preparada
+      <textarea id="draft-{{ d.id }}" rows="7" readonly style="width:100%;margin-top:6px">{{ d.body }}</textarea>
+    </label>
+    <div class="form-actions" style="margin-top:12px">
+      {% if d.status=='draft' %}
+      <button class="button secondary" type="button" onclick="copyDraft('draft-{{ d.id }}', this)">Copiar texto</button>
+      <form method="post" action="{{ url_for('mark_outreach_sent', draft_id=d.id) }}" onsubmit="return confirm('Você já enviou esta mensagem fora do LeadPilot? Só confirme se o envio realmente aconteceu.')">
+        <button class="button" type="submit">Confirmar que enviei</button>
+      </form>
+      <form method="post" action="{{ url_for('archive_outreach_draft', draft_id=d.id) }}" onsubmit="return confirm('Arquivar este rascunho?')">
+        <button class="button ghost" type="submit">Arquivar</button>
+      </form>
+      {% endif %}
+      <a class="button ghost" href="{{ url_for('lead_research', lead_id=d.lead_id) }}">Ver fonte / conferir dados</a>
+    </div>
+    <p class="muted" style="margin-top:12px">Criado em {{ d.created_at }} · Status do lead: {{ d.lead_status }}</p>
+  </article>
+  {% endfor %}
+{% else %}
+  <div class="empty">
+    <h3>Nenhum rascunho nesta fila</h3>
+    <p>Use “Preparar abordagens automaticamente” na lista de leads. A IA seleciona leads com e-mail ou telefone e salva os textos sem enviar mensagens.</p>
+    <a class="button" href="{{ url_for('leads') }}">Ir para leads</a>
+  </div>
+{% endif %}
+</section>
+<script>
+function copyDraft(id, button) {
+  const field = document.getElementById(id);
+  if (!field) return;
+  field.focus();
+  field.select();
+  field.setSelectionRange(0, field.value.length);
+  const copied = () => {
+    const original = button.textContent;
+    button.textContent = "Texto copiado";
+    window.setTimeout(() => { button.textContent = original; }, 1500);
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(field.value).then(copied).catch(() => document.execCommand("copy") && copied());
+  } else if (document.execCommand("copy")) {
+    copied();
+  }
+}
+</script>
+{% endblock %}
