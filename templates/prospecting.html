@@ -4,15 +4,49 @@
   <div><p class="eyebrow">PROSPECÇÃO</p><h1>Encontre empresas para abordar</h1><p class="muted">Busque empresas por segmento e cidade usando dados públicos do OpenStreetMap. Revise os resultados antes de cadastrar oportunidades.</p></div>
 </section>
 <section class="panel">
-  <form class="form-grid" method="get" action="{{ url_for('prospecting_tools.prospecting') }}">
+  <form class="form-grid" method="post" action="{{ url_for('prospecting_tools.start_search') }}">
     <label>Segmento ou tipo de empresa *<input name="segment" value="{{ segment }}" required maxlength="80" placeholder="Ex.: barbearias, clínicas, restaurantes"></label>
     <label>Cidade ou região *<input name="city" value="{{ city }}" required maxlength="120" placeholder="Ex.: Guarulhos, SP"></label>
-    <div class="wide form-actions"><button class="button" type="submit" name="search" value="1">Buscar empresas automaticamente</button><a class="button ghost" href="{{ url_for('prospecting_tools.prospecting') }}">Limpar</a></div>
+    <div class="wide form-actions"><button class="button" type="submit">Buscar empresas automaticamente</button><a class="button ghost" href="{{ url_for('prospecting_tools.prospecting') }}">Limpar</a></div>
   </form>
 </section>
 {% if searched %}
 <section class="panel">
   <div class="section-head"><h2>Resultados: {{ segment }} · {{ city }}</h2>{% if cached %}<span class="status">Cache (12 h)</span>{% endif %}</div>
+  {% if job_status in ['queued', 'running'] %}
+  <div id="search-progress" class="flash success" data-status-url="{{ url_for('prospecting_tools.search_status', job_id=job_id) }}">
+    <strong>Busca em andamento…</strong>
+    <p id="search-progress-message" style="margin:6px 0 0">{{ job_message or 'Consultando a fonte pública. Esta página pode ficar aberta; ela será atualizada automaticamente.' }}</p>
+    <div style="height:6px;background:#d8eee1;border-radius:10px;overflow:hidden;margin-top:12px"><div style="height:100%;width:40%;background:#18794e;border-radius:10px;animation:lp-progress 1.4s ease-in-out infinite alternate"></div></div>
+  </div>
+  <style>@keyframes lp-progress{from{transform:translateX(-50%)}to{transform:translateX(190%)}}</style>
+  <script>
+  (() => {
+    const holder = document.getElementById("search-progress");
+    if (!holder) return;
+    const message = document.getElementById("search-progress-message");
+    const statusUrl = holder.dataset.statusUrl;
+    let attempts = 0;
+    async function poll() {
+      attempts += 1;
+      try {
+        const response = await fetch(statusUrl, {cache: "no-store", credentials: "same-origin"});
+        if (!response.ok) throw new Error("status unavailable");
+        const data = await response.json();
+        if (data.status === "done" || data.status === "failed") {
+          window.location.reload();
+          return;
+        }
+        if (message && data.message) message.textContent = data.message;
+      } catch (_) {
+        if (message && attempts >= 8) message.textContent = "Ainda aguardando resposta. A página vai continuar verificando sem bloquear o painel.";
+      }
+      window.setTimeout(poll, attempts < 5 ? 1200 : 2000);
+    }
+    window.setTimeout(poll, 900);
+  })();
+  </script>
+  {% endif %}
   {% if error %}<div class="flash error">{{ error }}</div>{% endif %}
   {% if results %}
   <p class="muted">Encontradas {{ results|length }} empresa(s). Selecione apenas as oportunidades relevantes para importar ao seu funil.</p>
