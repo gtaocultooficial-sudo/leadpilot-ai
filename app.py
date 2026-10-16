@@ -200,13 +200,19 @@ def logout():
 @app.route("/")
 @login_required
 def dashboard():
+    _ensure_outreach_tables()
+    today_local = datetime.now(timezone.utc).astimezone(ZoneInfo("America/Sao_Paulo")).date().isoformat()
     with db() as conn:
         total = conn.execute("SELECT COUNT(*) AS n FROM leads").fetchone()["n"]
         clients = conn.execute("SELECT COUNT(*) AS n FROM leads WHERE status='Cliente'").fetchone()["n"]
         active = conn.execute("SELECT COUNT(*) AS n FROM leads WHERE status IN ('Novo','Qualificado','Contato preparado','Contatado','Respondeu','Reunião','Proposta')").fetchone()["n"]
         rows = conn.execute("SELECT * FROM leads ORDER BY updated_at DESC, id DESC LIMIT 8").fetchall()
         by_status = {status: conn.execute("SELECT COUNT(*) AS n FROM leads WHERE status=%s", (status,)).fetchone()["n"] for status in STATUSES}
-    return render_template("index.html", total=total, clients=clients, active=active, rows=rows, by_status=by_status, statuses=STATUSES)
+        overdue_followups = conn.execute("SELECT COUNT(*) AS n FROM outreach_drafts WHERE status='sent' AND COALESCE(follow_up_date,'')<>'' AND follow_up_date < %s", (today_local,)).fetchone()["n"]
+        today_followups = conn.execute("SELECT COUNT(*) AS n FROM outreach_drafts WHERE status='sent' AND follow_up_date=%s", (today_local,)).fetchone()["n"]
+        upcoming_followups = conn.execute("SELECT COUNT(*) AS n FROM outreach_drafts WHERE status='sent' AND COALESCE(follow_up_date,'')>%s", (today_local,)).fetchone()["n"]
+        replied_leads = conn.execute("SELECT COUNT(*) AS n FROM leads WHERE status='Respondeu'").fetchone()["n"]
+    return render_template("index.html", total=total, clients=clients, active=active, rows=rows, by_status=by_status, statuses=STATUSES, today_local=today_local, overdue_followups=overdue_followups, today_followups=today_followups, upcoming_followups=upcoming_followups, replied_leads=replied_leads)
 
 
 def _ensure_auto_research_jobs():
