@@ -52,6 +52,8 @@
   <p class="muted">Encontradas {{ results|length }} empresa(s). Selecione apenas as oportunidades relevantes para importar ao seu funil.</p>
   <form method="post" action="{{ url_for('prospecting_tools.import_selected') }}">
     <input type="hidden" name="cache_key" value="{{ cache_key }}">
+    <input type="hidden" name="query_city" value="{{ city }}">
+    <input type="hidden" name="query_segment" value="{{ segment }}">
     <div class="table-wrap"><table><thead><tr><th>Importar</th><th>Empresa</th><th>Endereço/região</th><th>Contato comercial público</th><th>Fonte</th></tr></thead><tbody>
     {% for item in results %}
     <tr>
