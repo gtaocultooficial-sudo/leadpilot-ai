@@ -5,7 +5,7 @@ import re
 import time
 from datetime import datetime, timedelta, timezone
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote_plus, urlencode
+from urllib.parse import quote_plus, urlencode, urlparse
 from urllib.request import Request, urlopen
 
 from flask import Blueprint, current_app, flash, redirect, render_template, request, session, url_for
@@ -190,7 +190,12 @@ def _request_overpass(query, clean_city):
             tags.get("addr:suburb", ""),
         ]
         address = ", ".join(part for part in address_bits if part)
-        website = tags.get("contact:website") or tags.get("website") or tags.get("url") or ""
+        website = (tags.get("contact:website") or tags.get("website") or tags.get("url") or "").strip()
+        if website and not website.lower().startswith(("http://", "https://")):
+            website = "https://" + website
+        parsed_website = urlparse(website) if website else None
+        if parsed_website and (parsed_website.scheme not in ("http", "https") or not parsed_website.netloc):
+            website = ""
         phone = tags.get("contact:phone") or tags.get("phone") or ""
         email = tags.get("contact:email") or tags.get("email") or ""
         found.append({
