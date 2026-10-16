@@ -49,6 +49,16 @@
       <p style="margin:8px 0 0">Confira os detalhes na fonte original: <a href="{{ enrichment_match.source_url }}" target="_blank" rel="noopener noreferrer">Abrir item no OpenStreetMap ↗</a></p>
       {% if not enrichment_match.city_match %}
         <p>A correspondência do nome, mesmo em 100%, não comprova que seja a unidade correta. Nenhum contato foi sugerido até confirmar a cidade.</p>
+        {% if enrichment_match.ignore_url %}
+          <div class="notice" style="margin-top:12px">
+            <strong>Este resultado pode ser ignorado nas próximas consultas.</strong>
+            <p>Isso não apaga a empresa nem altera os contatos; apenas registra que esta referência pública pertence a outra cidade e deve ser pulada.</p>
+            <form method="post" action="{{ url_for('ignore_research_result', lead_id=lead.id) }}">
+              <input type="hidden" name="source_url" value="{{ enrichment_match.ignore_url }}">
+              <button class="button ghost" type="submit">Ignorar este resultado e procurar outra unidade</button>
+            </form>
+          </div>
+        {% endif %}
         {% if has_saved_osm_reference %}
           <div class="notice" style="margin-top:12px">
             <strong>Esta referência já está vinculada ao lead.</strong>
