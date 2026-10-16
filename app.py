@@ -470,6 +470,21 @@ def lead_research(lead_id):
             "description": "Compare resultados em outro buscador, se necessário.",
             "url": "https://www.bing.com/search?q=" + quote(f'"{company}" {city} contato comercial'),
         },
+        {
+            "title": "Diretório Cylex",
+            "description": "Verifique se uma ficha comercial coincide com o nome, endereço e atividade.",
+            "url": "https://www.google.com/search?q=" + quote(f'site:cylex.com.br/guarulhos "{company}" "{city}" telefone'),
+        },
+        {
+            "title": "Diretório Solutudo",
+            "description": "Compare o nome da empresa e o endereço antes de associar telefone ou e-mail.",
+            "url": "https://www.google.com/search?q=" + quote(f'site:solutudo.com.br/empresas/sp/guarulhos "{company}"'),
+        },
+        {
+            "title": "Diretório OpenAlfa",
+            "description": "Confira a listagem de estabelecimentos no entorno e os dados da fonte.",
+            "url": "https://www.google.com/search?q=" + quote(f'site:brazil-streets.openalfa.com "{company}" "{city}"'),
+        },
     ]
 
     suggestions = {"website": "", "email": "", "phone": ""}
