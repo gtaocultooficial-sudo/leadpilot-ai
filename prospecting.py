@@ -293,8 +293,19 @@ def _photon_json(params, timeout=8):
         },
         method="GET",
     )
-    with urlopen(req, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+    try:
+        with urlopen(req, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        try:
+            detail = exc.read(1200).decode("utf-8", "replace")
+        except Exception:
+            detail = ""
+        current_app.logger.warning(
+            "Photon HTTP %s at %s; response=%s",
+            exc.code, urlparse(url).path, detail[:800]
+        )
+        raise
 
 
 def _photon_city_bbox(city):
@@ -302,19 +313,16 @@ def _photon_city_bbox(city):
     clean_city = city.split(",")[0].strip()
     if not clean_city:
         raise ValueError("Informe uma cidade, por exemplo: Guarulhos, SP.")
-    query = city.strip()
+    # Resolve the city with a simple name plus ISO country filter.
     params = {
-        "q": query + ", Brasil" if "brasil" not in query.casefold() else query,
+        "q": clean_city,
+        "countrycode": "br",
         "layer": "city",
         "limit": 5,
         "lang": "pt",
     }
     payload = _photon_json(params, timeout=7)
     features = payload.get("features") or []
-    if not features:
-        # One bounded fallback: search the city name without the state/country qualifier.
-        payload = _photon_json({"q": clean_city + ", Brasil", "layer": "city", "limit": 5, "lang": "pt"}, timeout=7)
-        features = payload.get("features") or []
     if not features:
         raise RuntimeError("Não consegui localizar essa cidade na fonte pública. Confira o nome e o estado.")
     chosen = None
@@ -360,18 +368,16 @@ def _photon_tags(segment):
 
 def _request_photon(segment, city):
     clean_city, bbox = _photon_city_bbox(city)
-    includes = _photon_tags(segment)
+    # Search by the user-provided segment within the resolved city box.
+    # This avoids optional category-only filters that are not consistently exposed
+    # by public Photon instances.
     params = {
+        "q": segment.strip(),
         "bbox": bbox,
+        "countrycode": "br",
         "limit": MAX_RESULTS,
         "lang": "pt",
     }
-    if includes:
-        # Photon allows a place-type-only query when an include filter is present.
-        params["include"] = ",".join(includes)
-    else:
-        # For unsupported segments, search place names within the selected city bounds.
-        params["q"] = segment.strip()
     payload = _photon_json(params, timeout=10)
     features = payload.get("features") or []
     found = []
@@ -458,10 +464,13 @@ def _get_results(segment, city):
     try:
         result_city, results = _request_photon(segment, city)
     except HTTPError as exc:
+        current_app.logger.warning("Photon request failed with HTTP %s", exc.code)
         if exc.code == 429:
             raise RuntimeError("O serviço público de busca aplicou limite de consultas. Aguarde alguns minutos antes de tentar de novo.") from exc
         if exc.code in (403, 406):
             raise RuntimeError(f"O serviço público recusou a consulta (HTTP {exc.code}). Use os links de pesquisa abaixo.") from exc
+        if exc.code == 400:
+            raise RuntimeError("A fonte pública rejeitou os parâmetros da consulta. A busca foi simplificada para pesquisar por nome/segmento dentro da cidade. Tente de novo após a atualização.") from exc
         raise RuntimeError(f"O serviço público de busca respondeu com HTTP {exc.code}. Tente novamente mais tarde ou use os links abaixo.") from exc
     except (URLError, TimeoutError, json.JSONDecodeError) as exc:
         current_app.logger.warning("Photon indisponível (%s): %s", type(exc).__name__, str(exc)[:200])
@@ -730,5 +739,4 @@ def import_selected():
             added += 1
     flash(f"Busca importada: {added} empresa(s) cadastrada(s); {skipped} duplicada(s) ignorada(s).", "success")
     return redirect(url_for("leads"))
-
 
