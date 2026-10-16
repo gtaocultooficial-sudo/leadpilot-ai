@@ -805,13 +805,15 @@ def lead_research(lead_id):
                     candidates.append((name_score + 0.08, feature, name_score, city_match))
 
                 overpass_match = None
+                overpass_error = ""
                 if not candidates:
                     try:
                         overpass_match = _find_overpass_business_match(company, city, ignored_urls)
                     except Exception as overpass_exc:
+                        overpass_error = str(overpass_exc)[:250]
                         app.logger.warning(
                             "Overpass company-name fallback unavailable for lead id=%s: %s",
-                            lead_id, str(overpass_exc)[:250]
+                            lead_id, overpass_error
                         )
 
                 if overpass_match and overpass_match.get("ambiguous"):
@@ -876,16 +878,23 @@ def lead_research(lead_id):
                         "found_count": 0,
                     }
                 elif not candidates:
-                    if ignored_count:
+                    if overpass_error:
+                        enrichment_message = (
+                            "A primeira busca não encontrou uma unidade confirmada, e a consulta alternativa do OpenStreetMap "
+                            "ficou indisponível ou não pôde ser concluída. Nenhum dado foi alterado. "
+                            "Tente novamente mais tarde ou use as pesquisas externas abaixo."
+                        )
+                    elif ignored_count:
                         enrichment_message = (
                             "O resultado de outra cidade que você rejeitou foi ignorado. "
-                            "A fonte não encontrou outra correspondência suficientemente confiável em Guarulhos; "
+                            "A busca alternativa dentro da área municipal também não encontrou outra ficha com localização confirmada; "
                             "nenhum dado foi alterado. Confira as pesquisas externas abaixo."
                         )
                     else:
                         enrichment_message = (
-                            "A fonte pública não encontrou uma correspondência confiável que também confirme o município pesquisado. "
-                            "Nenhum dado foi alterado. Confira o nome e a cidade nas pesquisas externas."
+                            "As consultas públicas do Photon e do Overpass não encontraram uma correspondência confiável "
+                            "que confirme o município pesquisado. Nenhum dado foi alterado. "
+                            "Confira o nome e a cidade nas pesquisas externas abaixo."
                         )
                 else:
                     candidates.sort(key=lambda item: item[0], reverse=True)
