@@ -587,7 +587,7 @@ def lead_research(lead_id):
         try:
             lead_notes = lead.get("notes") or ""
             previously_ignored_urls = set(re.findall(
-                r"OpenStreetMap ignored item:\\s*(https://www\\.openstreetmap\\.org/(?:node|way|relation)/\\d+)",
+                r"OpenStreetMap ignored item:\s*(https://www\.openstreetmap\.org/(?:node|way|relation)/\d+)",
                 lead_notes,
             ))
             saved_item = _fetch_saved_osm_item(lead_notes)
