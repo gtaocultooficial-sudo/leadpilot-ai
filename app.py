@@ -171,7 +171,12 @@ def new_lead():
                 (data["company"], data["contact_name"], data["email"], data["phone"], data["website"], data["segment"], data["city"], data["source"], data["need"], data["notes"], score, data["consent_basis"], now, now))
         flash("Lead cadastrado.", "success")
         return redirect(url_for("leads"))
-    return render_template("lead_form.html", lead={}, statuses=STATUSES, heading="Adicionar lead")
+    lead = {
+        "segment": request.args.get("segment", "").strip()[:80],
+        "city": request.args.get("city", "").strip()[:120],
+        "source": request.args.get("source", "").strip()[:120],
+    }
+    return render_template("lead_form.html", lead=lead, statuses=STATUSES, heading="Adicionar lead")
 
 
 @app.route("/leads/<int:lead_id>", methods=["GET", "POST"])
