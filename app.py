@@ -230,6 +230,11 @@ def dashboard():
             GROUP BY COALESCE(NULLIF(BTRIM(l.segment),''),'Sem segmento')
             ORDER BY contacted DESC, clients DESC, total DESC
             LIMIT 8""", ("%[Resposta comercial registrada%",)).fetchall()
+        segment_performance = [dict(row) for row in segment_performance]
+        for segment_row in segment_performance:
+            segment_row["response_rate"] = round(
+                (segment_row["replied"] / segment_row["contacted"]) * 100, 1
+            ) if segment_row["contacted"] else 0
     return render_template("index.html", total=total, clients=clients, active=active, rows=rows, by_status=by_status, statuses=STATUSES, today_local=today_local, overdue_followups=overdue_followups, today_followups=today_followups, upcoming_followups=upcoming_followups, replied_leads=replied_leads, contacted_leads=contacted_leads, replied_after_contact=replied_after_contact, response_rate=response_rate, segment_performance=segment_performance)
 
 
