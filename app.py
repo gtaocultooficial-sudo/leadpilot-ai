@@ -771,6 +771,45 @@ def lead_research(lead_id):
     )
 
 
+@app.route("/leads/<int:lead_id>/research/discard-source", methods=["POST"])
+@login_required
+def discard_research_source(lead_id):
+    """Remove only a mismatched OSM item pointer; keep the lead and all contact fields."""
+    now = now_iso()
+    with db() as conn:
+        existing = conn.execute("SELECT * FROM leads WHERE id=%s", (lead_id,)).fetchone()
+        if not existing:
+            flash("Lead não encontrado.", "error")
+            return redirect(url_for("leads"))
+
+        notes = (existing.get("notes") or "").strip()
+        pattern = r"(?:^|\n)OpenStreetMap item:\s*https://www\.openstreetmap\.org/(?:node|way|relation)/\d+"
+        new_notes, removed = re.subn(pattern, "", notes, count=1)
+        if not removed:
+            flash("Este lead não tem uma referência exata do OpenStreetMap para descartar.", "error")
+            return redirect(url_for("lead_research", lead_id=lead_id))
+
+        # Keep the street address and other notes, but record why this source link was rejected.
+        new_notes = re.sub(r"\n{3,}", "\n\n", new_notes).strip()
+        audit = (
+            f"[Revisão de fonte {now}] Referência do OpenStreetMap desassociada porque a localização "
+            "publicada não correspondeu com segurança ao município deste lead. "
+            "Empresa mantida no funil; contatos não alterados."
+        )
+        new_notes = (new_notes + "\n" + audit).strip() if new_notes else audit
+        conn.execute(
+            "UPDATE leads SET notes=%s, updated_at=%s WHERE id=%s",
+            (new_notes, now, lead_id),
+        )
+
+    flash(
+        "Referência geográfica incorreta desassociada. A empresa e os demais dados foram preservados; "
+        "você pode fazer uma nova consulta por cidade.",
+        "success",
+    )
+    return redirect(url_for("lead_research", lead_id=lead_id))
+
+
 @app.route("/leads/<int:lead_id>/research/save", methods=["POST"])
 @login_required
 def save_research_data(lead_id):
