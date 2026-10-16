@@ -7,6 +7,8 @@ import hashlib
 import hmac
 import io
 import os
+import threading
+import uuid
 from datetime import datetime, timezone
 from functools import wraps
 
@@ -206,6 +208,239 @@ def dashboard():
     return render_template("index.html", total=total, clients=clients, active=active, rows=rows, by_status=by_status, statuses=STATUSES)
 
 
+def _ensure_auto_research_jobs():
+    with db() as conn:
+        conn.execute("""CREATE TABLE IF NOT EXISTS auto_research_jobs (
+            id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            total INTEGER NOT NULL DEFAULT 0,
+            processed INTEGER NOT NULL DEFAULT 0,
+            enriched INTEGER NOT NULL DEFAULT 0,
+            no_match INTEGER NOT NULL DEFAULT 0,
+            errors INTEGER NOT NULL DEFAULT 0,
+            message TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )""")
+
+
+def _update_auto_research_job(job_id, **values):
+    allowed = {"status", "total", "processed", "enriched", "no_match", "errors", "message"}
+    assignments = []
+    params = []
+    for key, value in values.items():
+        if key not in allowed:
+            raise ValueError("Campo de tarefa inválido.")
+        assignments.append(f"{key}=%s")
+        params.append(value)
+    assignments.append("updated_at=%s")
+    params.extend([now_iso(), job_id])
+    with db() as conn:
+        conn.execute(
+            "UPDATE auto_research_jobs SET " + ", ".join(assignments) + " WHERE id=%s",
+            params,
+        )
+
+
+def _run_auto_research_job(app_obj, job_id):
+    """Find public contact channels for a small batch, only when business/city match."""
+    with app_obj.app_context():
+        processed = enriched = no_match = errors = 0
+        _update_auto_research_job(
+            job_id, status="running", message="Separando leads sem canal comercial direto…"
+        )
+        try:
+            with db() as conn:
+                candidates = conn.execute(
+                    """SELECT id, company, city, website, email, phone, notes, source, status, score
+                       FROM leads
+                       WHERE COALESCE(email,'')=''
+                         AND COALESCE(phone,'')=''
+                         AND COALESCE(city,'')<>''
+                         AND status NOT IN ('Cliente','Sem interesse')
+                         AND COALESCE(notes,'') NOT ILIKE %s
+                       ORDER BY score DESC, updated_at ASC
+                       LIMIT 12""",
+                    ("%[Pesquisa automática de contato]%",),
+                ).fetchall()
+            total = len(candidates)
+            _update_auto_research_job(
+                job_id, total=total,
+                message=f"Pesquisa automática iniciada para até {total} lead(s)."
+            )
+            if not candidates:
+                _update_auto_research_job(
+                    job_id, status="done", total=0, processed=0, enriched=0,
+                    no_match=0, errors=0,
+                    message="Não há leads elegíveis sem e-mail/telefone e sem tentativa automática anterior."
+                )
+                return
+
+            for raw in candidates:
+                lead = dict(raw)
+                lead_id = lead["id"]
+                now = now_iso()
+                notes = (lead.get("notes") or "").strip()
+                ignored_urls = set(re.findall(
+                    r"OpenStreetMap ignored item:\s*(https://www\.openstreetmap\.org/(?:node|way|relation)/\d+)",
+                    notes,
+                ))
+                try:
+                    match = _find_overpass_business_match(
+                        lead.get("company") or "", lead.get("city") or "", ignored_urls
+                    )
+                    found_fields = {}
+                    if match and not match.get("ambiguous"):
+                        # Existing values are deliberately retained; only blanks are enriched.
+                        for field in ("website", "email", "phone"):
+                            current = str(lead.get(field) or "").strip()
+                            proposed = str(match.get(field) or "").strip()
+                            if current or not proposed:
+                                continue
+                            if field == "website":
+                                if not proposed.lower().startswith(("https://", "http://")):
+                                    proposed = "https://" + proposed
+                                parsed = urlparse(proposed)
+                                if parsed.scheme not in ("https", "http") or not parsed.netloc:
+                                    continue
+                            elif field == "email":
+                                if ("@" not in proposed or "." not in proposed.rsplit("@", 1)[-1]
+                                    or any(char.isspace() for char in proposed)):
+                                    continue
+                            elif field == "phone":
+                                proposed = proposed[:80]
+                            found_fields[field] = proposed
+
+                    if match and match.get("ambiguous"):
+                        outcome = "resultado ambíguo; nenhum contato foi associado"
+                        no_match += 1
+                    elif not match:
+                        outcome = "nenhuma correspondência pública com município confirmado"
+                        no_match += 1
+                    elif not found_fields:
+                        outcome = "empresa localizada no município, mas a ficha não lista canal novo"
+                        no_match += 1
+                    else:
+                        outcome = "campos preenchidos: " + ", ".join(found_fields.keys())
+                        enriched += 1
+
+                    new_values = {
+                        "website": found_fields.get("website") or (lead.get("website") or ""),
+                        "email": found_fields.get("email") or (lead.get("email") or ""),
+                        "phone": found_fields.get("phone") or (lead.get("phone") or ""),
+                    }
+                    source_url = match.get("source_url", "") if match and not match.get("ambiguous") else ""
+                    city_label = match.get("city", "") if match and not match.get("ambiguous") else ""
+                    audit = (
+                        f"[Pesquisa automática de contato] {now} | {outcome}"
+                        + (f" | Município confirmado: {city_label}" if city_label else "")
+                        + (f" | Fonte: {source_url}" if source_url else " | Fonte: OpenStreetMap / Photon / Overpass")
+                    )
+                    new_notes = (notes + "\n" + audit).strip() if notes else audit
+                    updated_lead = {
+                        **lead, **new_values, "notes": new_notes,
+                        "source": lead.get("source") or "OpenStreetMap / Photon / Overpass",
+                    }
+                    score = score_lead(updated_lead)
+                    with db() as conn:
+                        conn.execute(
+                            """UPDATE leads
+                               SET website=%s, email=%s, phone=%s, notes=%s, source=%s,
+                                   score=%s, updated_at=%s
+                               WHERE id=%s""",
+                            (new_values["website"], new_values["email"], new_values["phone"],
+                             new_notes, updated_lead["source"], score, now, lead_id),
+                        )
+                except Exception as exc:
+                    errors += 1
+                    app_obj.logger.warning(
+                        "Auto contact research failed for lead %s (%s): %s",
+                        lead_id, lead.get("company"), str(exc)[:200]
+                    )
+                    # Do not add the completed-attempt marker on an error, so a later job may retry.
+                    audit = f"[Falha na pesquisa automática {now}] Fonte pública indisponível; pode tentar novamente."
+                    new_notes = (notes + "\n" + audit).strip() if notes else audit
+                    with db() as conn:
+                        conn.execute(
+                            "UPDATE leads SET notes=%s, updated_at=%s WHERE id=%s",
+                            (new_notes, now, lead_id),
+                        )
+                processed += 1
+                _update_auto_research_job(
+                    job_id, processed=processed, enriched=enriched,
+                    no_match=no_match, errors=errors,
+                    message=(
+                        f"Pesquisados {processed}/{total} leads: "
+                        f"{enriched} com canal encontrado, {no_match} sem correspondência segura, "
+                        f"{errors} falha(s) de fonte."
+                    ),
+                )
+
+            _update_auto_research_job(
+                job_id, status="done", processed=processed, enriched=enriched,
+                no_match=no_match, errors=errors,
+                message=(
+                    f"Pesquisa concluída: {enriched} lead(s) enriquecido(s) com canal público, "
+                    f"{no_match} sem canal novo ou sem correspondência segura, "
+                    f"{errors} erro(s) de consulta. Dados manuais foram preservados."
+                ),
+            )
+        except Exception:
+            app_obj.logger.exception("Auto research batch crashed for job %s", job_id)
+            _update_auto_research_job(
+                job_id, status="failed", processed=processed, enriched=enriched,
+                no_match=no_match, errors=errors + 1,
+                message="A pesquisa em lote falhou antes de terminar. Nenhum dado manual foi sobrescrito."
+            )
+
+
+@app.route("/leads/auto-research/start", methods=["POST"])
+@login_required
+def start_auto_research():
+    _ensure_auto_research_jobs()
+    with db() as conn:
+        active = conn.execute(
+            """SELECT id FROM auto_research_jobs
+               WHERE status IN ('queued','running')
+               ORDER BY created_at DESC LIMIT 1"""
+        ).fetchone()
+    if active:
+        return redirect(url_for("leads", auto_research_job=active["id"]))
+
+    job_id = uuid.uuid4().hex
+    now = now_iso()
+    with db() as conn:
+        conn.execute(
+            """INSERT INTO auto_research_jobs
+               (id,status,total,processed,enriched,no_match,errors,message,created_at,updated_at)
+               VALUES(%s,'queued',0,0,0,0,0,'Na fila para pesquisar contatos públicos…',%s,%s)""",
+            (job_id, now, now),
+        )
+    app_obj = app._get_current_object()
+    threading.Thread(
+        target=_run_auto_research_job,
+        args=(app_obj, job_id),
+        daemon=True,
+        name=f"leadpilot-contact-research-{job_id[:8]}",
+    ).start()
+    return redirect(url_for("leads", auto_research_job=job_id))
+
+
+@app.route("/leads/auto-research/status/<job_id>")
+@login_required
+def auto_research_status(job_id):
+    _ensure_auto_research_jobs()
+    with db() as conn:
+        row = conn.execute(
+            """SELECT id,status,total,processed,enriched,no_match,errors,message
+               FROM auto_research_jobs WHERE id=%s""",
+            (job_id,),
+        ).fetchone()
+    if not row:
+        return {"error": "Tarefa não encontrada."}, 404
+    return dict(row)
+
+
 @app.route("/leads")
 @login_required
 def leads():
@@ -271,9 +506,21 @@ def leads():
         if needs_manual_research and not has_direct and not has_website:
             lead["next_step"] = "Pesquisar diretório comercial ou perfil oficial"
         decorated.append(lead)
+    research_job_id = request.args.get("auto_research_job", "").strip()[:64]
+    research_job = None
+    if research_job_id:
+        _ensure_auto_research_jobs()
+        with db() as conn:
+            research_job = conn.execute(
+                """SELECT id,status,total,processed,enriched,no_match,errors,message
+                   FROM auto_research_jobs WHERE id=%s""",
+                (research_job_id,),
+            ).fetchone()
+
     return render_template(
         "leads.html", rows=decorated, statuses=STATUSES, q=query,
-        selected_status=status, selected_channel=channel, selected_quality=quality
+        selected_status=status, selected_channel=channel, selected_quality=quality,
+        research_job=dict(research_job) if research_job else None,
     )
 
 @app.route("/leads/new", methods=["GET", "POST"])
