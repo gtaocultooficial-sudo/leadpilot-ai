@@ -1,25 +1,46 @@
-{% extends "base.html" %}{% block title %}Prospecção assistida · LeadPilot AI{% endblock %}
+{% extends "base.html" %}{% block title %}Prospecção · LeadPilot AI{% endblock %}
 {% block content %}
 <section class="page-head">
-  <div><p class="eyebrow">PROSPECÇÃO</p><h1>Encontre empresas para abordar</h1><p class="muted">Monte buscas por segmento e cidade e revise os resultados antes de cadastrar oportunidades.</p></div>
+  <div><p class="eyebrow">PROSPECÇÃO</p><h1>Encontre empresas para abordar</h1><p class="muted">Busque empresas por segmento e cidade usando dados públicos do OpenStreetMap. Revise os resultados antes de cadastrar oportunidades.</p></div>
 </section>
 <section class="panel">
   <form class="form-grid" method="get" action="{{ url_for('prospecting_tools.prospecting') }}">
     <label>Segmento ou tipo de empresa *<input name="segment" value="{{ segment }}" required maxlength="80" placeholder="Ex.: barbearias, clínicas, restaurantes"></label>
-    <label>Cidade ou região *<input name="city" value="{{ city }}" required maxlength="120" placeholder="Ex.: Campinas, SP"></label>
-    <div class="wide form-actions"><button class="button" type="submit" name="search" value="1">Gerar pesquisas</button><a class="button ghost" href="{{ url_for('prospecting_tools.prospecting') }}">Limpar</a></div>
+    <label>Cidade ou região *<input name="city" value="{{ city }}" required maxlength="120" placeholder="Ex.: Guarulhos, SP"></label>
+    <div class="wide form-actions"><button class="button" type="submit" name="search" value="1">Buscar empresas automaticamente</button><a class="button ghost" href="{{ url_for('prospecting_tools.prospecting') }}">Limpar</a></div>
   </form>
 </section>
 {% if searched %}
 <section class="panel">
-  <div class="section-head"><h2>Pesquisas para {{ segment }} · {{ city }}</h2></div>
-  <div class="stats">
-    <div class="stat"><span>Mapa e empresas locais</span><p class="muted">Veja empresas, localização e site quando informado.</p><a class="button" href="{{ maps_url }}" target="_blank" rel="noopener noreferrer">Pesquisar no Maps ↗</a></div>
-    <div class="stat"><span>Pesquisa na web</span><p class="muted">Procure sites oficiais e páginas comerciais.</p><a class="button secondary" href="{{ google_url }}" target="_blank" rel="noopener noreferrer">Pesquisar no Google ↗</a></div>
-    <div class="stat"><span>Pesquisa alternativa</span><p class="muted">Compare resultados em outro buscador.</p><a class="button ghost" href="{{ bing_url }}" target="_blank" rel="noopener noreferrer">Pesquisar no Bing ↗</a></div>
+  <div class="section-head"><h2>Resultados: {{ segment }} · {{ city }}</h2>{% if cached %}<span class="status">Cache (12 h)</span>{% endif %}</div>
+  {% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+  {% if results %}
+  <p class="muted">Encontradas {{ results|length }} empresa(s). Selecione apenas as oportunidades relevantes para importar ao seu funil.</p>
+  <form method="post" action="{{ url_for('prospecting_tools.import_selected') }}">
+    <input type="hidden" name="cache_key" value="{{ cache_key }}">
+    <div class="table-wrap"><table><thead><tr><th>Importar</th><th>Empresa</th><th>Endereço/região</th><th>Contato comercial público</th><th>Fonte</th></tr></thead><tbody>
+    {% for item in results %}
+    <tr>
+      <td><input type="checkbox" name="selected" value="{{ item.osm_key }}" aria-label="Selecionar {{ item.name }}" style="width:auto"></td>
+      <td><strong>{{ item.name }}</strong>{% if item.tags %}<small>{{ item.tags }}</small>{% endif %}</td>
+      <td>{{ item.address or item.city or city }}</td>
+      <td>{% if item.website %}<a href="{{ item.website }}" target="_blank" rel="noopener noreferrer">Site ↗</a>{% endif %}{% if item.phone %}<small>{{ item.phone }}</small>{% endif %}{% if item.email %}<small>{{ item.email }}</small>{% endif %}{% if not item.website and not item.phone and not item.email %}<small>Sem contato listado</small>{% endif %}</td>
+      <td><a href="{{ item.osm_url }}" target="_blank" rel="noopener noreferrer">OpenStreetMap ↗</a></td>
+    </tr>
+    {% endfor %}</tbody></table></div>
+    <div class="form-actions" style="margin-top:18px"><button class="button" type="submit">Importar empresas selecionadas</button><a class="button ghost" href="{{ maps_url }}" target="_blank" rel="noopener noreferrer">Conferir no Maps ↗</a></div>
+  </form>
+  {% endif %}
+  <div class="notice"><strong>Fonte:</strong> dados © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a>, licença ODbL. A base pode estar incompleta ou desatualizada; confirme existência, relevância e canal de contato no site oficial antes de abordar.</div>
+</section>
+<section class="panel">
+  <div class="section-head"><h2>Outras pesquisas públicas</h2></div>
+  <p class="muted">Use estas opções para comparar e verificar resultados. Elas não são raspadas automaticamente.</p>
+  <div class="form-actions" style="margin-top:16px">
+    <a class="button" href="{{ maps_url }}" target="_blank" rel="noopener noreferrer">Pesquisar no Maps ↗</a>
+    <a class="button secondary" href="{{ google_url }}" target="_blank" rel="noopener noreferrer">Pesquisar no Google ↗</a>
+    <a class="button ghost" href="{{ bing_url }}" target="_blank" rel="noopener noreferrer">Pesquisar no Bing ↗</a>
   </div>
-  <div class="notice"><strong>Como funciona:</strong> esta versão abre pesquisas públicas, mas não extrai automaticamente os resultados nem envia mensagens. Confira se cada empresa existe e se é relevante, registre a fonte e cadastre somente as oportunidades adequadas.</div>
-  <div class="form-actions" style="margin-top:18px"><a class="button" href="{{ register_url }}">Cadastrar uma empresa encontrada</a><a class="button ghost" href="{{ url_for('import_csv') }}">Importar lista autorizada (CSV)</a></div>
 </section>
 {% endif %}
 <section class="panel">
@@ -31,6 +52,6 @@
     <div class="funnel-item"><span>4 · Qualificar</span><b>Necessidade real</b></div>
     <div class="funnel-item"><span>5 · Abordar</span><b>Revisão humana</b></div>
   </div>
-  <p class="notice">O score atual é heurístico, não é garantia de intenção de compra. Respeite a LGPD, os termos dos sites e pedidos para não receber novos contatos.</p>
+  <p class="notice">O score é heurístico, não prevê intenção de compra. Os dados do OSM podem estar incompletos. Respeite LGPD, termos de uso e pedidos para não receber novos contatos. Nenhuma mensagem é enviada automaticamente.</p>
 </section>
 {% endblock %}
