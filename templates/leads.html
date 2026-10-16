@@ -1,4 +1,54 @@
 {% extends "base.html" %}{% block title %}Leads · LeadPilot AI{% endblock %}
-{% block content %}<section class="page-head"><div><p class="eyebrow">PROSPECÇÃO</p><h1>Seus leads</h1><p class="muted">Priorize oportunidades e registre cada etapa do contato.</p></div><a class="button" href="{{ url_for('new_lead') }}">+ Novo lead</a></section>
-<form class="filters" method="get"><input name="q" value="{{ q }}" placeholder="Buscar empresa, segmento ou cidade"><select name="status"><option value="">Todos os status</option>{% for s in statuses %}<option value="{{ s }}" {% if selected_status==s %}selected{% endif %}>{{ s }}</option>{% endfor %}</select><button class="button secondary">Filtrar</button><a class="button ghost" href="{{ url_for('export_csv') }}">Exportar CSV</a></form>
-<section class="panel">{% if rows %}<div class="table-wrap"><table><thead><tr><th>Empresa</th><th>Segmento / Cidade</th><th>Score</th><th>Status</th><th>Ações</th></tr></thead><tbody>{% for l in rows %}<tr><td><strong>{{ l.company }}</strong><small>{{ l.contact_name or 'Contato não informado' }} · {{ l.email or l.phone or 'Sem canal informado' }}</small></td><td>{{ l.segment or '—' }}<small>{{ l.city or '—' }} · Fonte: {{ l.source or 'não informada' }}</small></td><td><span class="score">{{ l.score }}/100</span></td><td><span class="status">{{ l.status }}</span></td><td class="actions"><a href="{{ url_for('edit_lead', lead_id=l.id) }}">Editar</a><a href="{{ url_for('lead_message', lead_id=l.id) }}">Rascunho</a></td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="empty"><h3>Nenhum lead encontrado</h3><p>Cadastre um lead ou ajuste os filtros.</p></div>{% endif %}</section>{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div><p class="eyebrow">PROSPECÇÃO</p><h1>Seus leads</h1><p class="muted">Filtre por etapa, qualidade dos dados e canais comerciais disponíveis.</p></div>
+  <a class="button" href="{{ url_for('new_lead') }}">+ Novo lead</a>
+</section>
+
+<form class="filters" method="get">
+  <input name="q" value="{{ q }}" placeholder="Buscar empresa, segmento ou cidade">
+  <select name="status">
+    <option value="">Todos os status</option>
+    {% for s in statuses %}<option value="{{ s }}" {% if selected_status==s %}selected{% endif %}>{{ s }}</option>{% endfor %}
+  </select>
+  <select name="channel">
+    <option value="">Todos os canais</option>
+    <option value="direct" {% if selected_channel=="direct" %}selected{% endif %}>E-mail ou telefone cadastrados</option>
+    <option value="website" {% if selected_channel=="website" %}selected{% endif %}>Somente site cadastrado</option>
+    <option value="missing" {% if selected_channel=="missing" %}selected{% endif %}>Sem canal cadastrado</option>
+  </select>
+  <select name="quality">
+    <option value="">Toda qualidade de dados</option>
+    <option value="incomplete" {% if selected_quality=="incomplete" %}selected{% endif %}>Incompletos (&lt; 40)</option>
+    <option value="review" {% if selected_quality=="review" %}selected{% endif %}>Em verificação (40–69)</option>
+    <option value="documented" {% if selected_quality=="documented" %}selected{% endif %}>Bem documentados (70+)</option>
+  </select>
+  <button class="button secondary">Filtrar</button>
+  <a class="button ghost" href="{{ url_for('leads') }}">Limpar filtros</a>
+  <a class="button ghost" href="{{ url_for('export_csv') }}">Exportar CSV</a>
+</form>
+
+<section class="panel">
+  {% if rows %}
+  <div class="section-head"><h2>{{ rows|length }} lead(s) nesta visualização</h2><span class="muted">Ordenados por completude dos dados</span></div>
+  <div class="table-wrap"><table><thead><tr><th>Empresa</th><th>Segmento / Cidade</th><th>Qualidade dos dados</th><th>Status</th><th>Ações</th></tr></thead><tbody>
+  {% for l in rows %}
+  <tr>
+    <td>
+      <strong>{{ l.company }}</strong>
+      <small>{{ l.contact_name or 'Contato não informado' }} · {{ l.email or l.phone or 'Sem e-mail/telefone' }}</small>
+      <small><strong>{{ l.channel_label }}</strong> — {{ l.channel_hint }}</small>
+    </td>
+    <td>{{ l.segment or '—' }}<small>{{ l.city or '—' }} · Fonte: {{ l.source or 'não informada' }}</small></td>
+    <td><span class="score">{{ l.score }}/100</span><small>{{ l.quality_label }}</small><small>Próximo passo: {{ l.next_step }}</small></td>
+    <td><span class="status">{{ l.status }}</span></td>
+    <td class="actions"><a href="{{ url_for('edit_lead', lead_id=l.id) }}">Editar</a><a href="{{ url_for('lead_message', lead_id=l.id) }}">Rascunho</a></td>
+  </tr>
+  {% endfor %}
+  </tbody></table></div>
+  {% else %}
+  <div class="empty"><h3>Nenhum lead encontrado</h3><p>Altere os filtros ou cadastre outra oportunidade.</p><a class="button" href="{{ url_for('leads') }}">Limpar filtros</a></div>
+  {% endif %}
+</section>
+<p class="notice">O score mede a completude dos dados cadastrados, não intenção de compra ou chance garantida de fechar negócio. Verifique as informações antes de entrar em contato.</p>
+{% endblock %}
