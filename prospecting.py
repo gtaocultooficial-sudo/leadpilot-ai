@@ -674,11 +674,22 @@ def _auto_import_results(segment, city, results):
             if parsed_website and (parsed_website.scheme not in ("http", "https") or not parsed_website.netloc):
                 website = ""
 
+            email = str(item.get("email") or "").strip()[:320]
+            if email and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+                note_parts.append("E-mail público descartado por formato inválido; conferir na fonte.")
+                email = ""
+
+            phone = str(item.get("phone") or "").strip()[:100]
+            phone_digits = re.sub(r"\D", "", phone)
+            if phone and not 8 <= len(phone_digits) <= 15:
+                note_parts.append("Telefone público descartado por formato inválido; conferir na fonte.")
+                phone = ""
+
             data = {
                 "company": name,
                 "contact_name": "",
-                "email": str(item.get("email") or "").strip()[:320],
-                "phone": str(item.get("phone") or "").strip()[:100],
+                "email": email,
+                "phone": phone,
                 "website": website,
                 "segment": target_segment,
                 "city": target_city,
