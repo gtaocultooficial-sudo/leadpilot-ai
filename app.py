@@ -218,7 +218,19 @@ def dashboard():
                 SELECT 1 FROM outreach_drafts d WHERE d.lead_id=l.id AND d.status='sent'
             )""", ("%[Resposta comercial registrada%",)).fetchone()["n"]
         response_rate = round((replied_after_contact / contacted_leads) * 100, 1) if contacted_leads else 0
-    return render_template("index.html", total=total, clients=clients, active=active, rows=rows, by_status=by_status, statuses=STATUSES, today_local=today_local, overdue_followups=overdue_followups, today_followups=today_followups, upcoming_followups=upcoming_followups, replied_leads=replied_leads, contacted_leads=contacted_leads, replied_after_contact=replied_after_contact, response_rate=response_rate)
+        segment_performance = conn.execute("""SELECT
+            COALESCE(NULLIF(BTRIM(l.segment),''),'Sem segmento') AS segment,
+            COUNT(*) AS total,
+            COUNT(*) FILTER (WHERE l.status='Cliente') AS clients,
+            COUNT(*) FILTER (WHERE EXISTS (
+                SELECT 1 FROM outreach_drafts d WHERE d.lead_id=l.id AND d.status='sent'
+            )) AS contacted,
+            COUNT(*) FILTER (WHERE l.notes ILIKE %s) AS replied
+            FROM leads l
+            GROUP BY COALESCE(NULLIF(BTRIM(l.segment),''),'Sem segmento')
+            ORDER BY contacted DESC, clients DESC, total DESC
+            LIMIT 8""", ("%[Resposta comercial registrada%",)).fetchall()
+    return render_template("index.html", total=total, clients=clients, active=active, rows=rows, by_status=by_status, statuses=STATUSES, today_local=today_local, overdue_followups=overdue_followups, today_followups=today_followups, upcoming_followups=upcoming_followups, replied_leads=replied_leads, contacted_leads=contacted_leads, replied_after_contact=replied_after_contact, response_rate=response_rate, segment_performance=segment_performance)
 
 
 def _ensure_auto_research_jobs():
