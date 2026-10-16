@@ -47,7 +47,18 @@
       {% if enrichment_match.location_method %}<p style="margin:8px 0 0">Verificação de localização: {{ enrichment_match.location_method }}.</p>{% endif %}
       {% if enrichment_match.address %}<p style="margin:8px 0 0">Endereço/localidade retornada pelas coordenadas: {{ enrichment_match.address }}</p>{% endif %}
       <p style="margin:8px 0 0">Confira os detalhes na fonte original: <a href="{{ enrichment_match.source_url }}" target="_blank" rel="noopener noreferrer">Abrir item no OpenStreetMap ↗</a></p>
-      {% if not enrichment_match.city_match %}<p>A correspondência do nome, mesmo em 100%, não comprova que seja a unidade correta. Nenhum contato foi sugerido até confirmar a cidade.</p>{% endif %}
+      {% if not enrichment_match.city_match %}
+        <p>A correspondência do nome, mesmo em 100%, não comprova que seja a unidade correta. Nenhum contato foi sugerido até confirmar a cidade.</p>
+        {% if has_saved_osm_reference %}
+          <div class="notice" style="margin-top:12px">
+            <strong>Esta referência já está vinculada ao lead.</strong>
+            <p>Você pode removê-la sem apagar a empresa, o endereço cadastrado, os contatos ou o restante das notas. O sistema registra que a referência foi rejeitada por divergência de localização.</p>
+            <form method="post" action="{{ url_for('discard_research_source', lead_id=lead.id) }}">
+              <button class="button ghost" type="submit">Desvincular referência geográfica incorreta</button>
+            </form>
+          </div>
+        {% endif %}
+      {% endif %}
     </div>
     {% if enrichment_match.found_count %}
       <p class="muted" style="margin-top:12px">Os campos localizados foram sugeridos no formulário abaixo. Revise e clique em “Salvar dados no lead” para confirmar a gravação.</p>
