@@ -585,7 +585,14 @@ def lead_research(lead_id):
     enrichment_source_checked = ""
     if request.method == "POST":
         try:
-            saved_item = _fetch_saved_osm_item(lead.get("notes") or "")
+            lead_notes = lead.get("notes") or ""
+            previously_ignored_urls = set(re.findall(
+                r"OpenStreetMap ignored item:\\s*(https://www\\.openstreetmap\\.org/(?:node|way|relation)/\\d+)",
+                lead_notes,
+            ))
+            saved_item = _fetch_saved_osm_item(lead_notes)
+            if saved_item and saved_item.get("url") in previously_ignored_urls:
+                saved_item = None
             if saved_item:
                 # Use the exact OSM object attached during prospecting, rather than
                 # finding another business with the same name in a nearby city.
@@ -797,7 +804,61 @@ def lead_research(lead_id):
                         continue
                     candidates.append((name_score + 0.08, feature, name_score, city_match))
 
-                if not candidates and mismatched_locations:
+                overpass_match = None
+                if not candidates:
+                    try:
+                        overpass_match = _find_overpass_business_match(company, city, ignored_urls)
+                    except Exception as overpass_exc:
+                        app.logger.warning(
+                            "Overpass company-name fallback unavailable for lead id=%s: %s",
+                            lead_id, str(overpass_exc)[:250]
+                        )
+
+                if overpass_match and overpass_match.get("ambiguous"):
+                    enrichment_message = (
+                        "A segunda consulta pública encontrou mais de uma ficha parecida em Guarulhos. "
+                        "Nenhum contato foi sugerido; confira endereço e fonte antes de selecionar uma unidade."
+                    )
+                    enrichment_match = {
+                        "name": overpass_match.get("name") or company,
+                        "city": overpass_match.get("city") or city.split(",")[0],
+                        "score": overpass_match.get("score", 0),
+                        "city_match": False,
+                        "source_url": "https://www.openstreetmap.org/",
+                        "found_count": 0,
+                    }
+                elif overpass_match:
+                    suggestions = {
+                        "website": overpass_match.get("website", ""),
+                        "email": overpass_match.get("email", ""),
+                        "phone": overpass_match.get("phone", ""),
+                    }
+                    enrichment_match = {
+                        "name": overpass_match["name"],
+                        "city": overpass_match["city"],
+                        "address": overpass_match.get("address", ""),
+                        "location_method": overpass_match.get("location_method", "OpenStreetMap / Photon"),
+                        "score": overpass_match["score"],
+                        "city_match": True,
+                        "source_url": overpass_match["source_url"],
+                        "found_count": sum(bool(value) for value in suggestions.values()),
+                    }
+                    enrichment_source_checked = (
+                        f"OpenStreetMap / Overpass + Photon — {overpass_match['source_url']}"
+                    )
+                    if enrichment_match["found_count"]:
+                        enrichment_message = (
+                            f"A segunda consulta encontrou {enrichment_match['found_count']} dado(s) comercial(is) "
+                            f"no registro de “{overpass_match['name']}”, e a localização foi confirmada como "
+                            f"“{overpass_match['city']}”. Revise cada valor antes de salvar."
+                        )
+                    else:
+                        enrichment_message = (
+                            f"A segunda consulta confirmou “{overpass_match['name']}” em "
+                            f"“{overpass_match['city']}”, mas a ficha não lista site, e-mail ou telefone. "
+                            "Nenhum contato foi inventado nem alterado."
+                        )
+                elif not candidates and mismatched_locations:
                     mismatched_locations.sort(key=lambda item: item[2], reverse=True)
                     found_name, reported_city, name_score_int, source_url, mismatch_props = mismatched_locations[0]
                     enrichment_message = (
