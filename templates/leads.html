@@ -42,7 +42,7 @@
     <td>{{ l.segment or '—' }}<small>{{ l.city or '—' }} · Fonte: {{ l.source or 'não informada' }}</small></td>
     <td><span class="score">{{ l.score }}/100</span><small>{{ l.quality_label }}</small><small>Próximo passo: {{ l.next_step }}</small></td>
     <td><span class="status">{{ l.status }}</span></td>
-    <td class="actions"><a href="{{ url_for('edit_lead', lead_id=l.id) }}">Editar</a><a href="{{ url_for('lead_message', lead_id=l.id) }}">Rascunho</a></td>
+    <td class="actions"><a href="{{ url_for('lead_research', lead_id=l.id) }}">Pesquisar dados</a><a href="{{ url_for('edit_lead', lead_id=l.id) }}">Editar</a><a href="{{ url_for('lead_message', lead_id=l.id) }}">Rascunho</a></td>
   </tr>
   {% endfor %}
   </tbody></table></div>
