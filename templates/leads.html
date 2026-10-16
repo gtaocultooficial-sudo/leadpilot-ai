@@ -1,8 +1,51 @@
 {% extends "base.html" %}{% block title %}Leads · LeadPilot AI{% endblock %}
 {% block content %}
 <section class="page-head">
-  <div><p class="eyebrow">PROSPECÇÃO</p><h1>Seus leads</h1><p class="muted">Filtre por etapa, qualidade dos dados e canais comerciais disponíveis.</p></div>
+  <div><p class="eyebrow">PROSPECÇÃO</p><h1>Seus leads</h1><p class="muted">Filtre, pesquise e priorize os canais comerciais disponíveis.</p></div>
   <a class="button" href="{{ url_for('new_lead') }}">+ Novo lead</a>
+</section>
+
+<section class="panel">
+  <div class="section-head">
+    <div><h2>IA: encontrar contatos públicos</h2><p class="muted">Pesquisa até 12 leads por execução, confirma nome e município e salva apenas campos públicos encontrados. Os dados manuais são preservados.</p></div>
+    <form method="post" action="{{ url_for('start_auto_research') }}">
+      <button class="button" type="submit" {% if research_job and research_job.status in ['queued','running'] %}disabled{% endif %}>Pesquisar contatos automaticamente</button>
+    </form>
+  </div>
+  {% if research_job %}
+  <div class="notice" id="auto-research-status" data-status-url="{{ url_for('auto_research_status', job_id=research_job.id) }}">
+    <strong id="auto-research-title">{% if research_job.status in ['queued','running'] %}Pesquisa em andamento{% elif research_job.status == 'done' %}Pesquisa concluída{% else %}Pesquisa interrompida{% endif %}</strong>
+    <p id="auto-research-message">{{ research_job.message }}</p>
+    <p id="auto-research-counts" class="muted">{{ research_job.processed }}/{{ research_job.total }} pesquisados · {{ research_job.enriched }} enriquecidos · {{ research_job.no_match }} sem correspondência segura · {{ research_job.errors }} falhas</p>
+  </div>
+  {% if research_job.status in ['queued','running'] %}
+  <script>
+  (() => {
+    const box = document.getElementById("auto-research-status");
+    if (!box) return;
+    let attempts = 0;
+    async function poll() {
+      attempts += 1;
+      try {
+        const response = await fetch(box.dataset.statusUrl, {cache: "no-store", credentials: "same-origin"});
+        if (!response.ok) throw new Error("status unavailable");
+        const data = await response.json();
+        const message = document.getElementById("auto-research-message");
+        const counts = document.getElementById("auto-research-counts");
+        if (message) message.textContent = data.message || "";
+        if (counts) counts.textContent = String(data.processed) + "/" + String(data.total) + " pesquisados · " + String(data.enriched) + " enriquecidos · " + String(data.no_match) + " sem correspondência segura · " + String(data.errors) + " falhas";
+        if (data.status === "done" || data.status === "failed") {
+          window.location.reload();
+          return;
+        }
+      } catch (_) {}
+      window.setTimeout(poll, attempts < 5 ? 1500 : 3000);
+    }
+    window.setTimeout(poll, 1000);
+  })();
+  </script>
+  {% endif %}
+  {% endif %}
 </section>
 
 <form class="filters" method="get">
