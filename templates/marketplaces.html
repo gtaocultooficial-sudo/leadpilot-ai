@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% block title %}Marketplaces e Afiliados · LeadPilot AI{% endblock %}
+{% block content %}
+<style>
+.market-hero{padding:26px 30px;border-radius:18px;background:linear-gradient(120deg,#132545,#31558d);color:#fff;margin-bottom:20px}
+.market-hero h1{font-size:clamp(26px,3vw,35px);line-height:1.15;margin:5px 0 10px}
+.market-hero p{margin:0;color:#dbe6f7;max-width:760px}
+.market-search{display:flex;gap:10px;align-items:end;flex-wrap:wrap}
+.market-search label{flex:1;min-width:220px}
+.market-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.product-card{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#fff;display:flex;flex-direction:column;min-width:0}
+.product-image{height:180px;background:#f7f8fb;display:grid;place-items:center;padding:12px}
+.product-image img{height:100%;max-width:100%;object-fit:contain}
+.product-placeholder{font-size:40px}
+.product-body{padding:15px;display:flex;flex-direction:column;gap:9px;flex:1}
+.product-body h3{font-size:14px;line-height:1.35;margin:0;min-height:38px}
+.product-price{font-size:23px;font-weight:850;letter-spacing:-.5px}
+.product-original{color:var(--muted);font-size:12px;text-decoration:line-through}
+.product-meta{font-size:11px;color:var(--muted);display:flex;gap:7px;flex-wrap:wrap}
+.market-score{display:inline-flex;align-self:flex-start;background:#e8f6ed;color:#146c3d;border-radius:99px;padding:4px 9px;font-size:10px;font-weight:800}
+.product-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:auto}
+.product-actions form{margin:0}
+.product-actions a{font-size:12px;font-weight:700;text-decoration:none;color:#315ce8}
+.saved-list{display:grid;gap:14px}
+.saved-product{display:grid;grid-template-columns:90px minmax(0,1fr);gap:15px;border:1px solid var(--line);border-radius:14px;padding:14px}
+.saved-product img{width:90px;height:90px;object-fit:contain;background:#f7f8fb;border-radius:8px}
+.saved-product h3{margin:0 0 5px;font-size:14px}
+.saved-product .link-form{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;margin-top:10px}
+.promo-text{font-size:12px;min-height:95px;margin-top:10px}
+.partner-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.partner{padding:15px;border:1px solid var(--line);border-radius:12px;background:#fbfcff}
+.partner h3{font-size:14px;margin:0 0 7px}
+.partner p{font-size:12px;color:var(--muted);min-height:52px}
+.partner a{font-size:12px;font-weight:800;color:#315ce8;text-decoration:none}
+@media(max-width:900px){.market-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.partner-grid{grid-template-columns:1fr}}
+@media(max-width:620px){.market-grid{grid-template-columns:1fr}.saved-product{grid-template-columns:1fr}.saved-product img{width:100%;height:130px}.saved-product .link-form{grid-template-columns:1fr}.market-hero{padding:22px}}
+</style>
+<section class="market-hero">
+  <p class="eyebrow">RADAR DE PRODUTOS · AFILIADOS</p>
+  <h1>Encontre produtos para divulgar.</h1>
+  <p>Pesquise anúncios públicos do Mercado Livre, compare sinais básicos de oportunidade e monte sua lista. O LeadPilot organiza os produtos; seu link de comissão precisa vir do programa oficial de afiliados.</p>
+</section>
+
+<section class="panel">
+  <div class="section-head">
+    <div><h2>Pesquisar no Mercado Livre</h2><p class="muted">Busca pela API pública de anúncios. O indicador é uma triagem inicial, não promessa de vendas ou comissão.</p></div>
+  </div>
+  <form class="market-search" method="get" action="{{ url_for('marketplaces') }}">
+    <label>Produto ou nicho
+      <input name="q" maxlength="120" value="{{ query }}" placeholder="Ex.: fone bluetooth, air fryer, cadeira ergonômica" required>
+    </label>
+    <button class="button" type="submit">Pesquisar produtos</button>
+  </form>
+  {% if query %}
+  <p class="notice">Busca: <strong>{{ query }}</strong> · Resultados limitados a anúncios retornados pela API pública.</p>
+  {% endif %}
+</section>
+
+{% if query %}
+<section class="panel">
+  <div class="section-head"><div><h2>Resultados encontrados</h2><p class="muted">Salve os produtos que quer avaliar para divulgação.</p></div><span class="score">{{ results|length }} resultados</span></div>
+  {% if results %}
+  <div class="market-grid">
+    {% for item in results %}
+    <article class="product-card">
+      <div class="product-image">{% if item.thumbnail_url %}<img src="{{ item.thumbnail_url }}" alt="{{ item.title }}" loading="lazy">{% else %}<div class="product-placeholder">🛍️</div>{% endif %}</div>
+      <div class="product-body">
+        <span class="market-score">Triagem: {{ item.opportunity_score }}/100</span>
+        <h3>{{ item.title }}</h3>
+        <div>
+          <div class="product-price">R$ {{ "%.2f"|format(item.price)|replace(".", ",") }}</div>
+          {% if item.original_price and item.original_price > item.price %}<div class="product-original">R$ {{ "%.2f"|format(item.original_price)|replace(".", ",") }} · {{ item.discount_percent }}% de diferença</div>{% endif %}
+        </div>
+        <div class="product-meta">
+          <span>{{ "Novo" if item.condition == "new" else "Condição a conferir" }}</span>
+          <span>{{ "Frete grátis anunciado" if item.free_shipping else "Frete a conferir" }}</span>
+          {% if item.seller_name %}<span>Vendedor: {{ item.seller_name }}</span>{% endif %}
+        </div>
+        <div class="notice">A elegibilidade para comissão e as condições atuais precisam ser confirmadas no programa de afiliados.</div>
+        <div class="product-actions">
+          <a href="{{ item.product_url }}" target="_blank" rel="noopener noreferrer">Ver anúncio ↗</a>
+          {% if item.item_id in saved_ids %}
+          <span class="status">Salvo</span>
+          {% else %}
+          <form method="post" action="{{ url_for('save_marketplace_product') }}">
+            <input type="hidden" name="q" value="{{ query }}">
+            <input type="hidden" name="item_id" value="{{ item.item_id }}">
+            <input type="hidden" name="title" value="{{ item.title }}">
+            <input type="hidden" name="price" value="{{ item.price }}">
+            <input type="hidden" name="original_price" value="{{ item.original_price }}">
+            <input type="hidden" name="product_url" value="{{ item.product_url }}">
+            <input type="hidden" name="thumbnail_url" value="{{ item.thumbnail_url }}">
+            <input type="hidden" name="category_id" value="{{ item.category_id }}">
+            <input type="hidden" name="seller_name" value="{{ item.seller_name }}">
+            <input type="hidden" name="seller_level" value="{{ item.seller_level }}">
+            <input type="hidden" name="condition" value="{{ item.condition }}">
+            <input type="hidden" name="opportunity_score" value="{{ item.opportunity_score }}">
+            <button class="button secondary" type="submit">Salvar produto</button>
+          </form>
+          {% endif %}
+        </div>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty"><div class="empty-icon">⌕</div><h3>Nenhum anúncio disponível para esta busca</h3><p>Tente uma palavra mais curta, outra categoria ou pesquise novamente mais tarde.</p></div>
+  {% endif %}
+</section>
+{% endif %}
+
+<section class="panel">
+  <div class="section-head"><div><h2>Minha lista de oportunidades</h2><p class="muted">Guarde produtos, cole o link de afiliado gerado na plataforma oficial e prepare o texto de divulgação.</p></div><span class="score">{{ saved_products|length }} salvos</span></div>
+  {% if saved_products %}
+  <div class="saved-list">
+    {% for product in saved_products %}
+    <article class="saved-product">
+      {% if product.thumbnail_url %}<img src="{{ product.thumbnail_url }}" alt="{{ product.title }}" loading="lazy">{% else %}<div class="product-placeholder">🛍️</div>{% endif %}
+      <div>
+        <h3>{{ product.title }}</h3>
+        <div class="product-meta"><span>Mercado Livre</span><span>Triagem: {{ product.opportunity_score }}/100</span><span>Atualizar preço antes de divulgar</span></div>
+        <div><strong>R$ {{ "%.2f"|format(product.price)|replace(".", ",") }}</strong> · <a href="{{ product.product_url }}" target="_blank" rel="noopener noreferrer">Conferir anúncio ↗</a></div>
+        <form class="link-form" method="post" action="{{ url_for('save_marketplace_affiliate_link', product_id=product.id) }}">
+          <label>Seu link de afiliado oficial
+            <input name="affiliate_url" type="url" value="{{ product.affiliate_url }}" placeholder="Cole aqui o link gerado no portal do afiliado" autocomplete="url">
+          </label>
+          <button class="button" type="submit">Salvar link</button>
+        </form>
+        {% if product.affiliate_url %}
+        <p class="notice">Link registrado. <a href="{{ product.affiliate_url }}" target="_blank" rel="noopener noreferrer">Abrir link salvo ↗</a></p>
+        {% else %}
+        <p class="notice">Ainda falta gerar e colar seu link de afiliado para este produto.</p>
+        {% endif %}
+        {% set promo_text = "🛍️ Olha essa opção: " ~ product.title ~ "\n💰 Preço consultado: R$ " ~ ("%.2f"|format(product.price)|replace(".", ",")) ~ "\n👉 Confira aqui: " ~ (product.affiliate_url if product.affiliate_url else "[cole seu link oficial de afiliado]") ~ "\nPreço e disponibilidade podem mudar; confirme no anúncio." %}
+        <label>Rascunho de divulgação (revise antes de publicar)
+          <textarea class="promo-text" readonly>{{ promo_text }}</textarea>
+        </label>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty"><div class="empty-icon">＋</div><h3>Sua lista ainda está vazia</h3><p>Pesquise um produto acima e clique em “Salvar produto”. Ele aparecerá aqui para guardar o link oficial e preparar o texto de divulgação.</p></div>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <div class="section-head"><div><h2>Programas oficiais de afiliados</h2><p class="muted">A conta precisa estar aprovada e os links devem ser gerados dentro de cada programa.</p></div></div>
+  <div class="partner-grid">
+    <div class="partner"><h3>Mercado Livre</h3><p>Comece por aqui. Abra o programa, conclua seu cadastro e gere o link específico do produto usando as ferramentas oficiais.</p><a href="{{ mercadolivre_affiliate_url }}" target="_blank" rel="noopener noreferrer">Abrir Afiliados e Criadores ↗</a></div>
+    <div class="partner"><h3>Shopee</h3><p>Próxima integração planejada. O link personalizado deve ser gerado no portal/app oficial de afiliados.</p><a href="{{ shopee_affiliate_url }}" target="_blank" rel="noopener noreferrer">Abrir Programa de Afiliados ↗</a></div>
+    <div class="partner"><h3>Amazon</h3><p>Próxima integração planejada. A API de produtos tem requisitos de acesso próprios do Programa de Associados.</p><a href="{{ amazon_associates_url }}" target="_blank" rel="noopener noreferrer">Abrir Associados Amazon ↗</a></div>
+  </div>
+  <p class="notice">Por enquanto, a busca automática do catálogo está implementada para o Mercado Livre. A Shopee e a Amazon aparecem como próximos conectores; não são apresentadas como já integradas.</p>
+</section>
+{% endblock %}

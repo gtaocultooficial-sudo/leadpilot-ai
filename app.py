@@ -8,6 +8,7 @@ import hmac
 import io
 import os
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -77,6 +78,29 @@ def init_db():
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_leads_company ON leads(company)")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS marketplace_products (
+                id BIGSERIAL PRIMARY KEY,
+                marketplace TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                price DOUBLE PRECISION NOT NULL DEFAULT 0,
+                original_price DOUBLE PRECISION,
+                product_url TEXT NOT NULL,
+                thumbnail_url TEXT NOT NULL DEFAULT '',
+                category_id TEXT NOT NULL DEFAULT '',
+                seller_name TEXT NOT NULL DEFAULT '',
+                seller_level TEXT NOT NULL DEFAULT '',
+                condition TEXT NOT NULL DEFAULT '',
+                opportunity_score INTEGER NOT NULL DEFAULT 0,
+                affiliate_url TEXT NOT NULL DEFAULT '',
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (marketplace, item_id)
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_marketplace_products_updated ON marketplace_products(updated_at DESC)")
 
 
 def now_iso():
@@ -2139,6 +2163,238 @@ def export_csv():
 def sample_csv():
     data = "company;contact_name;email;phone;website;segment;city;source;need;notes;consent_basis\r\nExemplo Barbearia;Marcos;contato@example.com;;https://example.com;Barbearia;Guarulhos;Site público;Organizar agendamentos;Exemplo fictício, substituir por dados reais;Contato comercial pertinente\r\n"
     return Response(data, mimetype="text/csv; charset=utf-8", headers={"Content-Disposition": "attachment; filename=modelo_leads.csv"})
+
+
+# Marketplace affiliate hub — public catalog discovery first; affiliate tracking stays with each official program.
+_MARKETPLACE_SEARCH_CACHE = {}
+_MARKETPLACE_SEARCH_CACHE_LOCK = threading.Lock()
+_MARKETPLACE_CACHE_TTL_SECONDS = 600
+MERCADOLIVRE_AFFILIATE_URL = "https://www.mercadolivre.com.br/l/afiliados-home"
+SHOPEE_AFFILIATE_URL = "https://shopee.com.br/m/afiliados"
+AMAZON_ASSOCIATES_URL = "https://associados.amazon.com.br/"
+
+
+def search_mercadolivre_products(query, limit=24):
+    """Search public Mercado Livre listings through the documented site search API."""
+    query = " ".join(str(query or "").split())[:120]
+    if not query:
+        return []
+    limit = max(1, min(int(limit or 24), 50))
+    cache_key = (query.casefold(), limit)
+    now = time.time()
+    with _MARKETPLACE_SEARCH_CACHE_LOCK:
+        cached = _MARKETPLACE_SEARCH_CACHE.get(cache_key)
+        if cached and now - cached["at"] < _MARKETPLACE_CACHE_TTL_SECONDS:
+            return [dict(item) for item in cached["items"]]
+
+    search_url = "https://api.mercadolibre.com/sites/MLB/search?" + urlencode({
+        "q": query, "limit": limit, "sort": "relevance"
+    })
+    req = URLRequest(search_url, headers={
+        "Accept": "application/json",
+        "User-Agent": "LeadPilotAI/1.0",
+    })
+    with urlopen(req, timeout=15) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+
+    items = []
+    for raw in payload.get("results", []) or []:
+        seller = raw.get("seller") or {}
+        reputation = seller.get("seller_reputation") or {}
+        shipping = raw.get("shipping") or {}
+        try:
+            price = float(raw.get("price") or 0)
+        except (TypeError, ValueError):
+            price = 0.0
+        try:
+            original_price = float(raw.get("original_price") or price)
+        except (TypeError, ValueError):
+            original_price = price
+        discount = round((1 - price / original_price) * 100) if original_price > price > 0 else 0
+        seller_level = str(reputation.get("level_id") or "")
+        condition = str(raw.get("condition") or "")
+        sold_quantity = raw.get("sold_quantity") or 0
+        try:
+            sold_quantity = max(0, int(sold_quantity))
+        except (TypeError, ValueError):
+            sold_quantity = 0
+
+        # Transparent triage score, not a prediction of sales or commission.
+        score = 35
+        if condition == "new":
+            score += 15
+        if shipping.get("free_shipping"):
+            score += 10
+        if seller_level == "5_green":
+            score += 15
+        elif seller_level == "4_light_green":
+            score += 8
+        if discount >= 20:
+            score += 10
+        elif discount >= 8:
+            score += 6
+        if sold_quantity >= 500:
+            score += 10
+        elif sold_quantity >= 100:
+            score += 7
+        elif sold_quantity >= 20:
+            score += 3
+        score = min(100, score)
+
+        permalink = str(raw.get("permalink") or "").strip()
+        host = (urlparse(permalink).hostname or "").lower()
+        if not (permalink.startswith("https://") and (host == "mercadolivre.com.br" or host.endswith(".mercadolivre.com.br"))):
+            continue
+        thumbnail = str(raw.get("thumbnail") or "").strip()
+        if not thumbnail.startswith(("https://", "http://")):
+            thumbnail = ""
+        items.append({
+            "marketplace": "mercadolivre",
+            "item_id": str(raw.get("id") or ""),
+            "title": str(raw.get("title") or "Produto sem título"),
+            "price": price,
+            "original_price": original_price,
+            "discount_percent": max(0, min(99, discount)),
+            "product_url": permalink,
+            "thumbnail_url": thumbnail,
+            "category_id": str(raw.get("category_id") or ""),
+            "seller_name": str(seller.get("nickname") or ""),
+            "seller_level": seller_level,
+            "condition": condition,
+            "free_shipping": bool(shipping.get("free_shipping")),
+            "sold_quantity": sold_quantity,
+            "opportunity_score": score,
+        })
+
+    with _MARKETPLACE_SEARCH_CACHE_LOCK:
+        _MARKETPLACE_SEARCH_CACHE[cache_key] = {"at": now, "items": [dict(item) for item in items]}
+        if len(_MARKETPLACE_SEARCH_CACHE) > 100:
+            oldest = sorted(_MARKETPLACE_SEARCH_CACHE.items(), key=lambda pair: pair[1]["at"])[:25]
+            for key, _ in oldest:
+                _MARKETPLACE_SEARCH_CACHE.pop(key, None)
+    return items
+
+
+def _allowed_affiliate_host(value):
+    parsed = urlparse(str(value or "").strip())
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not host:
+        return False
+    allowed_exact = {
+        "meli.la", "mercadolivre.com.br", "mercadolivre.com",
+        "shopee.com.br", "shope.ee", "amzn.to", "amazon.com.br",
+    }
+    allowed_suffix = (".mercadolivre.com.br", ".mercadolivre.com", ".shopee.com.br", ".amazon.com.br")
+    return host in allowed_exact or any(host.endswith(suffix) for suffix in allowed_suffix)
+
+
+@app.route("/marketplaces")
+@login_required
+def marketplaces():
+    query = " ".join(request.args.get("q", "").split())[:120]
+    results = []
+    search_error = ""
+    if query:
+        try:
+            results = search_mercadolivre_products(query)
+        except Exception as exc:
+            search_error = "A busca no Mercado Livre falhou: {}. Tente novamente mais tarde.".format(str(exc)[:180])
+            flash(search_error, "error")
+
+    with db() as conn:
+        saved_products = conn.execute("""
+            SELECT * FROM marketplace_products
+            ORDER BY updated_at DESC, id DESC
+            LIMIT 100
+        """).fetchall()
+    saved_ids = {str(row["item_id"]) for row in saved_products if row["marketplace"] == "mercadolivre"}
+    return render_template(
+        "marketplaces.html",
+        query=query,
+        results=results,
+        saved_products=saved_products,
+        saved_ids=saved_ids,
+        search_error=search_error,
+        mercadolivre_affiliate_url=MERCADOLIVRE_AFFILIATE_URL,
+        shopee_affiliate_url=SHOPEE_AFFILIATE_URL,
+        amazon_associates_url=AMAZON_ASSOCIATES_URL,
+    )
+
+
+@app.route("/marketplaces/save", methods=["POST"])
+@login_required
+def save_marketplace_product():
+    item_id = str(request.form.get("item_id") or "").strip().upper()
+    title = str(request.form.get("title") or "").strip()[:500]
+    product_url = str(request.form.get("product_url") or "").strip()
+    if not re.fullmatch(r"MLB[0-9]+", item_id) or not title:
+        flash("Produto inválido: faça a busca novamente e tente salvar pela lista.", "error")
+        return redirect(url_for("marketplaces", q=request.form.get("q", "")))
+    parsed = urlparse(product_url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not (host == "mercadolivre.com.br" or host.endswith(".mercadolivre.com.br")):
+        flash("O link do produto precisa ser a página HTTPS oficial do Mercado Livre.", "error")
+        return redirect(url_for("marketplaces", q=request.form.get("q", "")))
+
+    def as_price(value):
+        try:
+            result = float(value)
+            return result if result >= 0 else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
+    price = as_price(request.form.get("price"))
+    original_price = as_price(request.form.get("original_price")) or price
+    thumbnail = str(request.form.get("thumbnail_url") or "").strip()
+    if not thumbnail.startswith(("https://", "http://")):
+        thumbnail = ""
+    category_id = str(request.form.get("category_id") or "").strip()[:80]
+    seller_name = str(request.form.get("seller_name") or "").strip()[:250]
+    seller_level = str(request.form.get("seller_level") or "").strip()[:80]
+    condition = str(request.form.get("condition") or "").strip()[:40]
+    try:
+        opportunity_score = max(0, min(100, int(request.form.get("opportunity_score") or 0)))
+    except (TypeError, ValueError):
+        opportunity_score = 0
+    now = now_iso()
+
+    with db() as conn:
+        conn.execute("""
+            INSERT INTO marketplace_products
+                (marketplace, item_id, title, price, original_price, product_url, thumbnail_url,
+                 category_id, seller_name, seller_level, condition, opportunity_score, created_at, updated_at)
+            VALUES ('mercadolivre', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (marketplace, item_id) DO UPDATE SET
+                title=EXCLUDED.title, price=EXCLUDED.price, original_price=EXCLUDED.original_price,
+                product_url=EXCLUDED.product_url, thumbnail_url=EXCLUDED.thumbnail_url,
+                category_id=EXCLUDED.category_id, seller_name=EXCLUDED.seller_name,
+                seller_level=EXCLUDED.seller_level, condition=EXCLUDED.condition,
+                opportunity_score=EXCLUDED.opportunity_score, updated_at=EXCLUDED.updated_at
+        """, (item_id, title, price, original_price, product_url, thumbnail, category_id,
+              seller_name, seller_level, condition, opportunity_score, now, now))
+    flash("Produto salvo na sua vitrine de oportunidades.", "success")
+    return redirect(url_for("marketplaces", q=request.form.get("q", "")))
+
+
+@app.route("/marketplaces/<int:product_id>/affiliate", methods=["POST"])
+@login_required
+def save_marketplace_affiliate_link(product_id):
+    affiliate_url = str(request.form.get("affiliate_url") or "").strip()
+    if affiliate_url and not _allowed_affiliate_host(affiliate_url):
+        flash("Use um link HTTPS gerado pelo programa oficial do Mercado Livre, Shopee ou Amazon.", "error")
+        return redirect(url_for("marketplaces"))
+    now = now_iso()
+    with db() as conn:
+        row = conn.execute("SELECT id FROM marketplace_products WHERE id=%s", (product_id,)).fetchone()
+        if not row:
+            flash("Produto não encontrado.", "error")
+            return redirect(url_for("marketplaces"))
+        conn.execute(
+            "UPDATE marketplace_products SET affiliate_url=%s, updated_at=%s WHERE id=%s",
+            (affiliate_url, now, product_id),
+        )
+    flash("Link afiliado salvo." if affiliate_url else "Link afiliado removido.", "success")
+    return redirect(url_for("marketplaces"))
 
 
 @app.route("/health")
