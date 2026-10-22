@@ -2,25 +2,27 @@
 
 Aplicação independente para organizar, prospectar e acompanhar oportunidades comerciais. Não faz parte do GTA Oculto AI.
 
-## Recursos desta versão
-- Painel de leads, métricas comerciais e prioridades de acompanhamento.
-- Cadastro/edição, pesquisa, filtros de status e prevenção de duplicatas.
-- Pontuação inicial heurística baseada nos dados disponíveis.
-- Prospecção por segmento e cidade usando dados públicos do OpenStreetMap.
-- Modo de revisão antes da importação e modo automático para cadastrar resultados elegíveis.
-- Pesquisa de contatos comerciais públicos em segundo plano quando disponível; os dados precisam ser conferidos antes de uma abordagem.
-- Fila comercial com rascunhos, registro manual de envio/resposta, notas e agendamento de retornos.
-- Filtros separados para retornos atrasados, de hoje e futuros.
-- Importação e exportação CSV/XLSX.
-- Login obrigatório para as páginas comerciais e persistência em PostgreSQL.
+# LeadPilot AI — Hub de afiliados e marketplaces
+
+O objetivo principal do LeadPilot AI é encontrar oportunidades de produtos em marketplaces, organizar links oficiais de afiliados e preparar materiais de divulgação. O foco inicial é o Mercado Livre; Shopee, Amazon e outros marketplaces entram como conectores seguintes. O projeto é independente do GTA Oculto AI.
+
+## Recursos do hub de marketplaces
+- Pesquisa de anúncios públicos do Mercado Livre pela API pública do site brasileiro.
+- Triagem inicial por condição do produto, frete, reputação do vendedor, desconto anunciado e unidades vendidas quando esses dados vêm na resposta.
+- Lista persistente de produtos salvos no PostgreSQL, com preço consultado, anúncio e indicador heurístico de oportunidade.
+- Campo para guardar o link oficial de afiliado gerado no portal de cada marketplace.
+- Rascunho de texto promocional baseado no título e no preço consultado, para revisão antes de publicar.
+- Acesso rápido aos programas oficiais de afiliados do Mercado Livre, Shopee e Amazon.
+- Login obrigatório e rotas protegidas.
 
 ## Limites importantes
-- O aplicativo não usa uma API externa de IA no momento. “Automático” significa executar etapas predefinidas de busca, deduplicação e cadastro, não uma IA autônoma.
-- A cobertura e a qualidade dos resultados dependem dos dados públicos disponíveis. Nem todas as empresas têm site, telefone ou e-mail públicos.
-- Não envia e-mails, WhatsApp ou outras mensagens automaticamente.
-- A pontuação é heurística; revise os dados e os rascunhos antes de abordar qualquer empresa.
-- O aplicativo não garante conversões nem receita. O resultado comercial precisa ser validado com contatos reais.
-- Ao usar dados pessoais para prospecção, verifique a base legal, a finalidade, a minimização dos dados e os mecanismos de oposição aplicáveis à LGPD.
+- O indicador de oportunidade é uma triagem simples; não é uma estimativa de comissão, probabilidade comprovada de venda ou garantia de renda.
+- A busca automática de catálogo está implementada primeiro para o Mercado Livre. Shopee e Amazon ainda não têm conectores de pesquisa integrados.
+- O LeadPilot não gera por conta própria um link de afiliado válido. É necessário estar aprovado no programa da plataforma, gerar o link oficial do produto e colá-lo no registro salvo.
+- O programa do Mercado Livre pode restringir tipos de páginas e canais de divulgação. Use links de produtos específicos, gere-os pelas ferramentas oficiais e divulgue somente nos canais aceitos e cadastrados no programa.
+- O aplicativo ainda não publica conteúdo nem mensagens automaticamente. Os textos são rascunhos para revisar; publicar e verificar resultados são etapas futuras.
+- O módulo antigo de prospecção de empresas fica disponível como legado, mas deixou de ser o foco principal do projeto.
+- As regras, disponibilidade e comissões dos programas podem mudar; confirme sempre as condições diretamente em cada portal oficial.
 
 ## Configuração obrigatória
 O aplicativo deve falhar ao iniciar se as variáveis essenciais não estiverem definidas, evitando publicar uma versão sem autenticação ou banco.
@@ -45,7 +47,8 @@ python -c "import getpass,hashlib; print(hashlib.sha256(getpass.getpass('Senha: 
 5. Configure as variáveis acima antes do deploy. Use a URL interna do banco PostgreSQL quando o banco e o serviço estiverem no Render.
 
 ## Próximos passos recomendados
-1. Testes automatizados para filtros, deduplicação e fluxos de prospecção.
-2. Verificação de robustez dos trabalhos em segundo plano em reinícios do serviço.
-3. Medição da qualidade dos contatos e do funil comercial.
-4. Validação de uma oferta comercial e obtenção dos primeiros clientes pagantes.
+1. Integrar a pesquisa de catálogo da Shopee e da Amazon seguindo suas regras e mecanismos oficiais.
+2. Criar um radar programado para detectar mudanças relevantes de preço, disponibilidade e ofertas sem exceder limites de API.
+3. Gerar variações de textos e roteiros para Shorts/Reels, com revisão e histórico dos materiais.
+4. Adicionar acompanhamento de links, cliques e conversões usando os recursos de relatórios permitidos por cada programa.
+5. Testes automatizados para pesquisa, validação dos links, deduplicação e persistência de dados.
