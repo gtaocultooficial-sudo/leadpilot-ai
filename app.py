@@ -94,6 +94,7 @@ def init_db():
                 condition TEXT NOT NULL DEFAULT '',
                 opportunity_score INTEGER NOT NULL DEFAULT 0,
                 affiliate_url TEXT NOT NULL DEFAULT '',
+                promo_draft TEXT NOT NULL DEFAULT '',
                 notes TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -101,6 +102,8 @@ def init_db():
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_marketplace_products_updated ON marketplace_products(updated_at DESC)")
+        # Idempotent migration for databases created before persistent promo drafts existed.
+        conn.execute("ALTER TABLE marketplace_products ADD COLUMN IF NOT EXISTS promo_draft TEXT NOT NULL DEFAULT ''")
 
 
 def now_iso():
@@ -2288,6 +2291,23 @@ def _allowed_affiliate_host(value):
     return host in allowed_exact or any(host.endswith(suffix) for suffix in allowed_suffix)
 
 
+def _build_marketplace_promo_draft(title, price, affiliate_url=""):
+    """Build a factual, editable draft without claiming an unverified discount or commission."""
+    title = " ".join(str(title or "").split())[:500] or "produto"
+    try:
+        numeric_price = max(0.0, float(price or 0))
+    except (TypeError, ValueError):
+        numeric_price = 0.0
+    price_text = f"{numeric_price:.2f}".replace(".", ",")
+    link = str(affiliate_url or "").strip() or "[cole seu link oficial de afiliado]"
+    return (
+        f"🛍️ Olha essa opção: {title}\n"
+        f"💰 Preço consultado: R$ {price_text}\n"
+        f"👉 Confira aqui: {link}\n"
+        "Preço e disponibilidade podem mudar; confirme no anúncio."
+    )
+
+
 @app.route("/marketplaces")
 @login_required
 def marketplaces():
@@ -2362,16 +2382,24 @@ def save_marketplace_product():
         conn.execute("""
             INSERT INTO marketplace_products
                 (marketplace, item_id, title, price, original_price, product_url, thumbnail_url,
-                 category_id, seller_name, seller_level, condition, opportunity_score, created_at, updated_at)
-            VALUES ('mercadolivre', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 category_id, seller_name, seller_level, condition, opportunity_score,
+                 affiliate_url, promo_draft, created_at, updated_at)
+            VALUES ('mercadolivre', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, '', %s, %s, %s)
             ON CONFLICT (marketplace, item_id) DO UPDATE SET
                 title=EXCLUDED.title, price=EXCLUDED.price, original_price=EXCLUDED.original_price,
                 product_url=EXCLUDED.product_url, thumbnail_url=EXCLUDED.thumbnail_url,
                 category_id=EXCLUDED.category_id, seller_name=EXCLUDED.seller_name,
                 seller_level=EXCLUDED.seller_level, condition=EXCLUDED.condition,
-                opportunity_score=EXCLUDED.opportunity_score, updated_at=EXCLUDED.updated_at
+                opportunity_score=EXCLUDED.opportunity_score,
+                promo_draft=CASE
+                    WHEN COALESCE(marketplace_products.promo_draft, '')=''
+                    THEN EXCLUDED.promo_draft
+                    ELSE marketplace_products.promo_draft
+                END,
+                updated_at=EXCLUDED.updated_at
         """, (item_id, title, price, original_price, product_url, thumbnail, category_id,
-              seller_name, seller_level, condition, opportunity_score, now, now))
+              seller_name, seller_level, condition, opportunity_score,
+              _build_marketplace_promo_draft(title, price), now, now))
     flash("Produto salvo na sua vitrine de oportunidades.", "success")
     return redirect(url_for("marketplaces", q=request.form.get("q", "")))
 
@@ -2385,15 +2413,46 @@ def save_marketplace_affiliate_link(product_id):
         return redirect(url_for("marketplaces"))
     now = now_iso()
     with db() as conn:
+        row = conn.execute(
+            "SELECT id, title, price, affiliate_url, promo_draft FROM marketplace_products WHERE id=%s",
+            (product_id,),
+        ).fetchone()
+        if not row:
+            flash("Produto não encontrado.", "error")
+            return redirect(url_for("marketplaces"))
+        current_draft = str(row.get("promo_draft") or "")
+        previous_generated = _build_marketplace_promo_draft(
+            row["title"], row["price"], row.get("affiliate_url") or ""
+        )
+        # Keep a manually edited draft intact; refresh only an untouched generated draft.
+        if not current_draft or current_draft == previous_generated:
+            current_draft = _build_marketplace_promo_draft(row["title"], row["price"], affiliate_url)
+        conn.execute(
+            "UPDATE marketplace_products SET affiliate_url=%s, promo_draft=%s, updated_at=%s WHERE id=%s",
+            (affiliate_url, current_draft, now, product_id),
+        )
+    flash("Link afiliado salvo." if affiliate_url else "Link afiliado removido.", "success")
+    return redirect(url_for("marketplaces"))
+
+
+@app.route("/marketplaces/<int:product_id>/promo", methods=["POST"])
+@login_required
+def save_marketplace_promo_draft(product_id):
+    promo_draft = str(request.form.get("promo_draft") or "").strip()
+    if len(promo_draft) > 5000:
+        flash("O rascunho deve ter no máximo 5.000 caracteres.", "error")
+        return redirect(url_for("marketplaces"))
+    now = now_iso()
+    with db() as conn:
         row = conn.execute("SELECT id FROM marketplace_products WHERE id=%s", (product_id,)).fetchone()
         if not row:
             flash("Produto não encontrado.", "error")
             return redirect(url_for("marketplaces"))
         conn.execute(
-            "UPDATE marketplace_products SET affiliate_url=%s, updated_at=%s WHERE id=%s",
-            (affiliate_url, now, product_id),
+            "UPDATE marketplace_products SET promo_draft=%s, updated_at=%s WHERE id=%s",
+            (promo_draft, now, product_id),
         )
-    flash("Link afiliado salvo." if affiliate_url else "Link afiliado removido.", "success")
+    flash("Rascunho promocional salvo.", "success")
     return redirect(url_for("marketplaces"))
 
 
