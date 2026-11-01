@@ -131,10 +131,13 @@
         {% else %}
         <p class="notice">Ainda falta gerar e colar seu link de afiliado para este produto.</p>
         {% endif %}
-        {% set promo_text = "🛍️ Olha essa opção: " ~ product.title ~ "\n💰 Preço consultado: R$ " ~ ("%.2f"|format(product.price)|replace(".", ",")) ~ "\n👉 Confira aqui: " ~ (product.affiliate_url if product.affiliate_url else "[cole seu link oficial de afiliado]") ~ "\nPreço e disponibilidade podem mudar; confirme no anúncio." %}
-        <label>Rascunho de divulgação (revise antes de publicar)
-          <textarea class="promo-text" readonly>{{ promo_text }}</textarea>
-        </label>
+        {% set promo_text = product.promo_draft or ("🛍️ Olha essa opção: " ~ product.title ~ "\n💰 Preço consultado: R$ " ~ ("%.2f"|format(product.price)|replace(".", ",")) ~ "\n👉 Confira aqui: " ~ (product.affiliate_url if product.affiliate_url else "[cole seu link oficial de afiliado]") ~ "\nPreço e disponibilidade podem mudar; confirme no anúncio.") %}
+        <form method="post" action="{{ url_for('save_marketplace_promo_draft', product_id=product.id) }}">
+          <label>Rascunho de divulgação (editável e salvo no banco)
+            <textarea class="promo-text" name="promo_draft" maxlength="5000">{{ promo_text }}</textarea>
+          </label>
+          <button class="button secondary" type="submit">Salvar rascunho</button>
+        </form>
       </div>
     </article>
     {% endfor %}
