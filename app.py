@@ -2301,9 +2301,9 @@ def _build_marketplace_promo_draft(title, price, affiliate_url=""):
     price_text = f"{numeric_price:.2f}".replace(".", ",")
     link = str(affiliate_url or "").strip() or "[cole seu link oficial de afiliado]"
     return (
-        f"🛍️ Olha essa opção: {title}\\n"
-        f"💰 Preço consultado: R$ {price_text}\\n"
-        f"👉 Confira aqui: {link}\\n"
+        f"🛍️ Olha essa opção: {title}\n"
+        f"💰 Preço consultado: R$ {price_text}\n"
+        f"👉 Confira aqui: {link}\n"
         "Preço e disponibilidade podem mudar; confirme no anúncio."
     )
 
